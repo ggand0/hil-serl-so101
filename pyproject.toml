@@ -7,7 +7,7 @@ authors = [
 ]
 dependencies = [
     "feetech-servo-sdk>=1.0.0",
-    "lerobot",
+    "lerobot[hilserl]",
     "numpy",
 ]
 requires-python = ">=3.10"
