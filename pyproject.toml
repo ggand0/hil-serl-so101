@@ -1,0 +1,30 @@
+[project]
+name = "so101-playground"
+version = "0.1.0"
+description = "SO-101 follower robot arm playground and testing scripts"
+authors = [
+    {name = "gota", email = "gota@example.com"},
+]
+dependencies = [
+    "feetech-servo-sdk>=1.0.0",
+    "lerobot",
+    "numpy",
+]
+requires-python = ">=3.10"
+readme = "README.md"
+license = {text = "MIT"}
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "isort",
+    "flake8",
+]
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+
+[tool.isort]
+profile = "black"
