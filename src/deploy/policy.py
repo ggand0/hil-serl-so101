@@ -185,19 +185,13 @@ class LowDimStateBuilder:
     """Builds low-dim state vector for policy input.
 
     The sim training uses a 21-dim state:
-    - joint_pos (6): Joint positions in radians
-    - joint_vel (6): Joint velocities
+    - joint_pos (6): Joint positions in radians (5 arm + 1 gripper)
+    - joint_vel (6): Joint velocities (5 arm + 1 gripper)
     - gripper_pos (3): End-effector XYZ position
     - gripper_euler (3): End-effector orientation (roll, pitch, yaw)
     - cube_pos (3): Cube XYZ position
 
     For real robot deployment, cube_pos is NOT available from sensors.
-    Options:
-    1. Zero out cube_pos (may degrade performance)
-    2. Use vision to estimate cube_pos
-    3. Retrain without cube_pos
-
-    This class helps construct the state vector from real robot sensors.
     """
 
     def __init__(self, include_cube_pos: bool = False):
@@ -216,24 +210,35 @@ class LowDimStateBuilder:
         joint_vel: np.ndarray,
         gripper_pos: np.ndarray,
         gripper_euler: np.ndarray,
+        gripper_state: float = 0.0,
         cube_pos: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Build state vector.
 
         Args:
-            joint_pos: Joint positions (6,).
-            joint_vel: Joint velocities (6,).
+            joint_pos: Arm joint positions (5,) in radians.
+            joint_vel: Arm joint velocities (5,).
             gripper_pos: End-effector position (3,).
             gripper_euler: End-effector orientation as euler angles (3,).
+            gripper_state: Gripper joint position (scalar, default 0).
             cube_pos: Cube position (3,). Required if include_cube_pos=True.
 
         Returns:
             State vector (21,) float32.
         """
-        # Ensure all inputs are 1D arrays
+        # Ensure joint arrays have 6 elements (5 arm + 1 gripper)
+        joint_pos = np.atleast_1d(joint_pos).astype(np.float32)
+        joint_vel = np.atleast_1d(joint_vel).astype(np.float32)
+
+        # Pad to 6 joints if only 5 provided
+        if len(joint_pos) == 5:
+            joint_pos = np.append(joint_pos, gripper_state)
+        if len(joint_vel) == 5:
+            joint_vel = np.append(joint_vel, 0.0)
+
         parts = [
-            np.atleast_1d(joint_pos).astype(np.float32),
-            np.atleast_1d(joint_vel).astype(np.float32),
+            joint_pos[:6],
+            joint_vel[:6],
             np.atleast_1d(gripper_pos).astype(np.float32),
             np.atleast_1d(gripper_euler).astype(np.float32),
         ]
@@ -243,7 +248,6 @@ class LowDimStateBuilder:
                 raise ValueError("cube_pos required when include_cube_pos=True")
             parts.append(np.atleast_1d(cube_pos).astype(np.float32))
         else:
-            # Zero-pad cube_pos dimensions
             parts.append(np.zeros(3, dtype=np.float32))
 
         return np.concatenate(parts)
