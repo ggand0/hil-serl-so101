@@ -11,6 +11,8 @@ MuJoCo/Policy uses radians:
 This module handles the conversion between these formats.
 """
 
+import json
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -25,47 +27,68 @@ MOTOR_NAMES = [
     "wrist_roll",
 ]
 
-# Approximate joint ranges in radians (from MuJoCo model)
-# These are used for conversion between normalized and radians
-JOINT_RANGES_RAD = {
-    "shoulder_pan": (-2.0, 2.0),
-    "shoulder_lift": (-2.0, 2.0),
-    "elbow_flex": (-2.0, 2.0),
-    "wrist_flex": (-1.57, 1.57),
-    "wrist_roll": (-1.57, 1.57),
-}
+# Load calibration from LeRobot cache
+CALIBRATION_PATH = Path("/home/gota/.cache/huggingface/lerobot/calibration/robots/so101_follower/ggando_so101_follower.json")
+
+def _load_calibration():
+    with open(CALIBRATION_PATH) as f:
+        return json.load(f)
+
+CALIBRATION = _load_calibration()
+
+# Feetech servo: 4096 encoder positions per revolution
+ENCODER_PER_RAD = 4096 / (2 * np.pi)  # ~652 encoder units per radian
 
 
 def normalized_to_radians(normalized: float, joint_name: str) -> float:
     """Convert LeRobot normalized position (-100 to 100) to radians."""
-    low, high = JOINT_RANGES_RAD[joint_name]
-    # -100 -> low, 100 -> high
-    return low + (normalized + 100) / 200 * (high - low)
+    cal = CALIBRATION[joint_name]
+    range_min = cal["range_min"]
+    range_max = cal["range_max"]
+
+    # Normalized to encoder position
+    encoder = (normalized + 100) / 200 * (range_max - range_min) + range_min
+
+    # Encoder to radians (mid-range = 0 radians)
+    mid_encoder = (range_min + range_max) / 2
+    radians = (encoder - mid_encoder) / ENCODER_PER_RAD
+
+    return radians
 
 
 def radians_to_normalized(radians: float, joint_name: str) -> float:
     """Convert radians to LeRobot normalized position (-100 to 100)."""
-    low, high = JOINT_RANGES_RAD[joint_name]
+    cal = CALIBRATION[joint_name]
+    range_min = cal["range_min"]
+    range_max = cal["range_max"]
+
+    # Radians to encoder (mid-range = 0 radians)
+    mid_encoder = (range_min + range_max) / 2
+    encoder = radians * ENCODER_PER_RAD + mid_encoder
+
     # Clamp to range
-    radians = np.clip(radians, low, high)
-    # low -> -100, high -> 100
-    return (radians - low) / (high - low) * 200 - 100
+    encoder = np.clip(encoder, range_min, range_max)
+
+    # Encoder to normalized
+    normalized = (encoder - range_min) / (range_max - range_min) * 200 - 100
+
+    return normalized
 
 
 def gripper_policy_to_lerobot(policy_output: float) -> float:
     """Convert policy gripper output (-1 to 1) to LeRobot (0 to 100).
 
     Policy: -1 = closed, 1 = open
-    LeRobot: 0 = open, 100 = closed (inverted!)
+    LeRobot: 0 = closed, 100 = open
     """
-    # -1 -> 100 (closed), 1 -> 0 (open)
-    return (1 - policy_output) / 2 * 100
+    # -1 -> 0 (closed), 1 -> 100 (open)
+    return (policy_output + 1) / 2 * 100
 
 
 def gripper_lerobot_to_policy(lerobot_pos: float) -> float:
     """Convert LeRobot gripper (0 to 100) to policy range (-1 to 1)."""
-    # 0 -> 1 (open), 100 -> -1 (closed)
-    return 1 - lerobot_pos / 50
+    # 0 -> -1 (closed), 100 -> 1 (open)
+    return lerobot_pos / 50 - 1
 
 
 class SO101Robot:
@@ -278,10 +301,12 @@ def test_conversion():
             assert abs(back - val) < 0.1, f"{name} roundtrip failed for {val}"
 
     # Test gripper conversion
-    assert abs(gripper_policy_to_lerobot(-1) - 100) < 0.1, "Gripper closed failed"
-    assert abs(gripper_policy_to_lerobot(1) - 0) < 0.1, "Gripper open failed"
-    assert abs(gripper_lerobot_to_policy(100) - (-1)) < 0.1, "Gripper reverse closed failed"
-    assert abs(gripper_lerobot_to_policy(0) - 1) < 0.1, "Gripper reverse open failed"
+    # Policy: -1 = closed, 1 = open
+    # LeRobot: 0 = closed, 100 = open
+    assert abs(gripper_policy_to_lerobot(-1) - 0) < 0.1, "Gripper closed failed"
+    assert abs(gripper_policy_to_lerobot(1) - 100) < 0.1, "Gripper open failed"
+    assert abs(gripper_lerobot_to_policy(0) - (-1)) < 0.1, "Gripper reverse closed failed"
+    assert abs(gripper_lerobot_to_policy(100) - 1) < 0.1, "Gripper reverse open failed"
 
     print("All conversion tests passed!")
 
