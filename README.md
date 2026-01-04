@@ -121,6 +121,63 @@ uv run lerobot-record \
     --policy.path=outputs/train/act_so101_red_cube_bowl/checkpoints/last/pretrained_model
 ```
 
+## RL Deployment (Sim-to-Real)
+
+Deploy MuJoCo-trained DrQ-v2 policies to the real robot.
+
+### Calibrate Cube Position
+
+Position the robot to mark where the cube should be placed:
+
+```bash
+# Move to training initial position (above cube)
+uv run python scripts/ik_reset_position.py
+
+# Also lower to grasp height
+uv run python scripts/ik_reset_position.py --lower
+
+# Adjust cube position
+uv run python scripts/ik_reset_position.py --cube_x 0.28 --cube_y -0.02
+
+# Read current robot position
+uv run python scripts/ik_reset_position.py --record_only
+```
+
+### Run RL Inference
+
+Run a trained policy on the real robot:
+
+```bash
+# Basic inference
+uv run python scripts/rl_inference.py \
+    --checkpoint /path/to/snapshot.pt
+
+# With video recording
+uv run python scripts/rl_inference.py \
+    --checkpoint /path/to/snapshot.pt \
+    --record_dir ./recordings \
+    --external_camera 2
+
+# Dry run (mock robot/camera)
+uv run python scripts/rl_inference.py \
+    --checkpoint /path/to/snapshot.pt \
+    --dry_run
+```
+
+**Key options:**
+- `--action_scale`: Meters per action unit (default 0.02 = 2cm)
+- `--control_hz`: Control frequency (default 10Hz)
+- `--cube_x`, `--cube_y`: Expected cube position
+
+### Test IK Motion
+
+Test the IK controller with simple movements:
+
+```bash
+uv run python scripts/test_ik_motion.py
+uv run python scripts/test_ik_motion.py --dry_run
+```
+
 ## Quick Reference
 
 | Command | Description |
@@ -128,7 +185,10 @@ uv run lerobot-record \
 | `lerobot-teleoperate` | Test leader-follower mirroring |
 | `lerobot-record` | Record demonstrations (with `--teleop`) |
 | `lerobot-train` | Train a policy on recorded data |
-| `lerobot-record --policy.path=...` | Run policy inference |
+| `lerobot-record --policy.path=...` | Run IL policy inference |
+| `scripts/rl_inference.py` | Run RL policy (sim-to-real) |
+| `scripts/ik_reset_position.py` | Calibrate cube position |
+| `scripts/test_ik_motion.py` | Test IK controller |
 
 ## Troubleshooting
 
