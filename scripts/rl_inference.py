@@ -10,6 +10,10 @@ Usage:
     # Real robot
     uv run python scripts/rl_inference.py --checkpoint /path/to/snapshot.pt
 
+    # With video recording (wrist + external camera)
+    uv run python scripts/rl_inference.py --checkpoint /path/to/snapshot.pt \
+        --record_dir ./recordings --external_camera 2
+
 Architecture:
     Camera → Preprocess → Frame Stack ─┐
                                        ├─→ Policy → Cartesian Action → IK → Joint Commands → Robot
@@ -19,8 +23,10 @@ Architecture:
 import argparse
 import time
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 # Add project root to path
@@ -108,6 +114,18 @@ def main():
         default=0.0,
         help="Expected cube Y position (meters)",
     )
+    parser.add_argument(
+        "--record_dir",
+        type=str,
+        default=None,
+        help="Directory to save episode recordings (enables recording)",
+    )
+    parser.add_argument(
+        "--external_camera",
+        type=int,
+        default=None,
+        help="External camera index for third-person view recording",
+    )
 
     args = parser.parse_args()
 
@@ -172,6 +190,36 @@ def main():
     # State builder (no cube position in real deployment)
     state_builder = LowDimStateBuilder(include_cube_pos=False)
 
+    # === Recording setup ===
+    record_dir = None
+    external_cap = None
+    if args.record_dir:
+        record_dir = Path(args.record_dir)
+        record_dir.mkdir(parents=True, exist_ok=True)
+        print(f"\n[Recording] Saving episodes to {record_dir}")
+
+        # Open external camera if specified
+        if args.external_camera is not None:
+            external_cap = cv2.VideoCapture(args.external_camera)
+            if external_cap.isOpened():
+                # Warm up
+                for _ in range(10):
+                    external_cap.read()
+                ext_w = int(external_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                ext_h = int(external_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                print(f"  External camera {args.external_camera}: {ext_w}x{ext_h}")
+            else:
+                print(f"  Failed to open external camera {args.external_camera}")
+                external_cap = None
+
+    def center_crop_square(image: np.ndarray) -> np.ndarray:
+        """Center crop to square."""
+        h, w = image.shape[:2]
+        size = min(h, w)
+        y_start = (h - size) // 2
+        x_start = (w - size) // 2
+        return image[y_start:y_start + size, x_start:x_start + size]
+
     # Frame buffer for stacking low_dim_state
     state_buffer = deque(maxlen=policy.frame_stack)
 
@@ -218,9 +266,70 @@ def main():
 
         return ee_pos
 
+    def safe_return():
+        """Safe return sequence: lift up first, then go to rest position."""
+        print("\nSafe return sequence...")
+
+        # Step 1: Lift up to safe height (keep wrist orientation)
+        print("  Lifting to safe height...")
+        try:
+            current_joints = robot.get_joint_positions_radians()
+            ik.sync_joint_positions(current_joints)
+            current_ee = ik.get_ee_position()
+            safe_height_target = current_ee.copy()
+            safe_height_target[2] = 0.15  # Lift to 15cm
+
+            for step in range(40):
+                current_joints = robot.get_joint_positions_radians()
+                current_joints[3] = np.pi / 2
+                current_joints[4] = -np.pi / 2
+                target_joints = ik.compute_ik(safe_height_target, current_joints, locked_joints=[3, 4])
+                target_joints[3] = np.pi / 2
+                target_joints[4] = -np.pi / 2
+                robot.send_action(target_joints, 1.0)
+                time.sleep(0.05)
+
+                ik.sync_joint_positions(robot.get_joint_positions_radians())
+                ee_pos = ik.get_ee_position()
+                if ee_pos[2] > 0.12:  # High enough
+                    break
+
+            print(f"  Lifted to: {ik.get_ee_position()}")
+            time.sleep(0.3)
+        except Exception as e:
+            print(f"  Warning: Failed to lift ({e}), going directly to rest...")
+
+        # Step 2: Return to rest position with gripper closed
+        print("  Returning to rest position...")
+        robot.send_action(REST_JOINTS, -1.0)  # Close gripper at rest
+        time.sleep(1.0)
+
     try:
         for episode in range(args.num_episodes):
             print(f"\n--- Episode {episode + 1}/{args.num_episodes} ---")
+
+            # Initialize video writers for this episode
+            wrist_writer = None
+            external_writer = None
+            if record_dir:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                episode_prefix = f"ep{episode+1:02d}_{timestamp}"
+
+                # Wrist camera writer (480x480 square crop)
+                if camera is not None:
+                    wrist_path = record_dir / f"{episode_prefix}_wrist.mp4"
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    wrist_writer = cv2.VideoWriter(str(wrist_path), fourcc, args.control_hz, (480, 480))
+                    print(f"  Recording wrist: {wrist_path}")
+
+                # External camera writer
+                if external_cap is not None:
+                    ext_w = int(external_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    ext_h = int(external_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    ext_size = min(ext_w, ext_h)
+                    external_path = record_dir / f"{episode_prefix}_external.mp4"
+                    external_writer = cv2.VideoWriter(str(external_path), fourcc, args.control_hz, (ext_size, ext_size))
+                    print(f"  Recording external: {external_path}")
 
             # Step 1: Reset to safe extended position
             print("  Step 1: Safe extended position...")
@@ -294,6 +403,23 @@ def main():
                         print("  Camera frame error, ending episode")
                         break
 
+                    # Record wrist camera (get raw frame for higher quality)
+                    if wrist_writer is not None:
+                        raw_frame = camera.get_raw_frame()
+                        if raw_frame is not None:
+                            # Center crop to square
+                            cropped = center_crop_square(raw_frame)
+                            # Resize to 480x480 for reasonable file size
+                            resized = cv2.resize(cropped, (480, 480))
+                            wrist_writer.write(resized)
+
+                # Record external camera
+                if external_writer is not None and external_cap is not None:
+                    ret, ext_frame = external_cap.read()
+                    if ret:
+                        cropped = center_crop_square(ext_frame)
+                        external_writer.write(cropped)
+
                 # Stack low_dim states
                 low_dim_obs = np.stack(list(state_buffer), axis=0).astype(np.float32)
 
@@ -349,15 +475,29 @@ def main():
                 if sleep_time > 0:
                     time.sleep(sleep_time)
 
+            # Close video writers for this episode
+            if wrist_writer is not None:
+                wrist_writer.release()
+            if external_writer is not None:
+                external_writer.release()
+
             print(f"  Episode {episode + 1} complete")
 
     except KeyboardInterrupt:
         print("\nInterrupted by user")
+        # Close any open writers
+        if 'wrist_writer' in dir() and wrist_writer is not None:
+            wrist_writer.release()
+        if 'external_writer' in dir() and external_writer is not None:
+            external_writer.release()
 
     finally:
         print("\nCleaning up...")
         if camera is not None:
             camera.close()
+        if external_cap is not None:
+            external_cap.release()
+        safe_return()
         robot.disconnect()
         print("Done.")
 

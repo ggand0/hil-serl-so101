@@ -60,6 +60,9 @@ class CameraPreprocessor:
         # Camera capture
         self._cap: Optional[cv2.VideoCapture] = None
 
+        # Last raw frame (for recording)
+        self._last_raw_frame: Optional[np.ndarray] = None
+
     def open(self) -> bool:
         """Open camera capture.
 
@@ -82,6 +85,14 @@ class CameraPreprocessor:
         if self._cap is not None:
             self._cap.release()
             self._cap = None
+
+    def get_raw_frame(self) -> Optional[np.ndarray]:
+        """Get last captured raw BGR frame (for recording).
+
+        Returns:
+            Last raw BGR frame or None if no frame captured yet.
+        """
+        return self._last_raw_frame
 
     def _center_crop_square(self, image: np.ndarray) -> np.ndarray:
         """Center crop image to square (uses smaller dimension).
@@ -137,6 +148,9 @@ class CameraPreprocessor:
         ret, frame = self._cap.read()
         if not ret:
             return None
+
+        # Store raw frame for recording
+        self._last_raw_frame = frame.copy()
 
         return self._preprocess_frame(frame)
 
