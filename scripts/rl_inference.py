@@ -199,14 +199,14 @@ def main():
             current_joints = robot.get_joint_positions_radians()
             # Lock wrist joints at π/2
             current_joints[3] = np.pi / 2
-            current_joints[4] = np.pi / 2
+            current_joints[4] = -np.pi / 2
             # Multiple IK iterations for better convergence
             for _ in range(3):
                 target_joints = ik.compute_ik(target_pos, current_joints, locked_joints=[3, 4])
                 current_joints = target_joints
             # Ensure wrist stays locked
             target_joints[3] = np.pi / 2
-            target_joints[4] = np.pi / 2
+            target_joints[4] = -np.pi / 2
             robot.send_action(target_joints, 1.0)  # Open gripper
             time.sleep(dt)
 
@@ -231,7 +231,7 @@ def main():
             print("  Step 2: Setting top-down wrist orientation...")
             topdown_joints = robot.get_joint_positions_radians().copy()
             topdown_joints[3] = np.pi / 2
-            topdown_joints[4] = np.pi / 2
+            topdown_joints[4] = -np.pi / 2  # wrist_roll (flipped for real robot)
             robot.send_action(topdown_joints, 1.0)
             time.sleep(1.0)
 

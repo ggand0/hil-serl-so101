@@ -174,10 +174,10 @@ def main():
         for step in range(40):
             current_joints = robot.get_joint_positions_radians()
             current_joints[3] = np.pi / 2
-            current_joints[4] = np.pi / 2
+            current_joints[4] = -np.pi / 2
             target_joints = ik.compute_ik(safe_height_target, current_joints, locked_joints=[3, 4])
             target_joints[3] = np.pi / 2
-            target_joints[4] = np.pi / 2
+            target_joints[4] = -np.pi / 2
             robot.send_action(target_joints, 1.0)
             time.sleep(0.05)
 
@@ -210,7 +210,7 @@ def main():
         print("  Step 1.5: Setting top-down wrist orientation (joints 3,4 = π/2)...")
         topdown_joints = robot.get_joint_positions_radians().copy()
         topdown_joints[3] = np.pi / 2  # wrist_pitch
-        topdown_joints[4] = np.pi / 2  # wrist_roll
+        topdown_joints[4] = -np.pi / 2  # wrist_roll (flipped for real robot)
         robot.send_action(topdown_joints, 1.0)
         time.sleep(1.0)
 
@@ -227,14 +227,14 @@ def main():
             current_joints = robot.get_joint_positions_radians()
             # Lock wrist joints 3,4 at π/2 during IK
             current_joints[3] = np.pi / 2
-            current_joints[4] = np.pi / 2
+            current_joints[4] = -np.pi / 2
             # Multiple IK iterations per step for better convergence
             for _ in range(3):
                 target_joints = ik.compute_ik(target, current_joints, locked_joints=[3, 4])
                 current_joints = target_joints
             # Ensure wrist stays locked
             target_joints[3] = np.pi / 2
-            target_joints[4] = np.pi / 2
+            target_joints[4] = -np.pi / 2
             robot.send_action(target_joints, 1.0)
             time.sleep(0.05)
 
@@ -257,12 +257,12 @@ def main():
             for step in range(60):
                 current_joints = robot.get_joint_positions_radians()
                 current_joints[3] = np.pi / 2
-                current_joints[4] = np.pi / 2
+                current_joints[4] = -np.pi / 2
                 for _ in range(3):
                     target_joints = ik.compute_ik(target, current_joints, locked_joints=[3, 4])
                     current_joints = target_joints
                 target_joints[3] = np.pi / 2
-                target_joints[4] = np.pi / 2
+                target_joints[4] = -np.pi / 2
                 robot.send_action(target_joints, 1.0)
                 time.sleep(0.05)
 
