@@ -83,26 +83,22 @@ class CameraPreprocessor:
             self._cap.release()
             self._cap = None
 
-    def _center_crop(self, image: np.ndarray) -> np.ndarray:
-        """Center crop image to match sim FOV.
+    def _center_crop_square(self, image: np.ndarray) -> np.ndarray:
+        """Center crop image to square (uses smaller dimension).
 
         Args:
             image: Input image (H, W, C).
 
         Returns:
-            Center-cropped image.
+            Square center-cropped image.
         """
         h, w = image.shape[:2]
+        size = min(h, w)
 
-        # Calculate crop dimensions
-        crop_h = int(h * self.crop_ratio)
-        crop_w = int(w * self.crop_ratio)
+        y_start = (h - size) // 2
+        x_start = (w - size) // 2
 
-        # Calculate crop offsets
-        y_start = (h - crop_h) // 2
-        x_start = (w - crop_w) // 2
-
-        return image[y_start : y_start + crop_h, x_start : x_start + crop_w]
+        return image[y_start : y_start + size, x_start : x_start + size]
 
     def _preprocess_frame(self, frame: np.ndarray) -> np.ndarray:
         """Preprocess a single frame.
@@ -116,8 +112,8 @@ class CameraPreprocessor:
         # Convert BGR to RGB
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Center crop to match sim FOV
-        cropped = self._center_crop(rgb)
+        # Center crop to square
+        cropped = self._center_crop_square(rgb)
 
         # Resize to target size
         resized = cv2.resize(

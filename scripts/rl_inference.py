@@ -96,6 +96,18 @@ def main():
         default=10.0,
         help="Control frequency in Hz",
     )
+    parser.add_argument(
+        "--cube_x",
+        type=float,
+        default=0.25,
+        help="Expected cube X position (meters)",
+    )
+    parser.add_argument(
+        "--cube_y",
+        type=float,
+        default=0.0,
+        help="Expected cube Y position (meters)",
+    )
 
     args = parser.parse_args()
 
@@ -170,9 +182,70 @@ def main():
     print("Ready to run. Press Ctrl+C to stop.")
     print("=" * 60)
 
+    # Training initial position (from curriculum_stage=3 in lift_cube.py)
+    # Gripper positioned above cube, open, with wrist joints at π/2 (top-down)
+    FINGER_WIDTH_OFFSET = -0.015  # Static finger is offset from gripper center
+    GRASP_Z_OFFSET = 0.005
+    HEIGHT_OFFSET = 0.03  # Start 3cm above grasp height
+    CUBE_Z = 0.015  # Cube height on table
+
+    # Safe positions
+    SAFE_JOINTS = np.zeros(5)  # Extended forward - safe for IK movements
+    REST_JOINTS = np.array([-0.247, -1.8132, 1.6812, 1.2187, -2.9821])  # Folded rest
+
+    def move_to_initial_pose_with_wrist_lock(robot, ik, target_pos, num_steps=100, dt=0.05):
+        """Move robot to target EE position using IK with wrist locked at π/2."""
+        for step in range(num_steps):
+            current_joints = robot.get_joint_positions_radians()
+            # Lock wrist joints at π/2
+            current_joints[3] = np.pi / 2
+            current_joints[4] = np.pi / 2
+            # Multiple IK iterations for better convergence
+            for _ in range(3):
+                target_joints = ik.compute_ik(target_pos, current_joints, locked_joints=[3, 4])
+                current_joints = target_joints
+            # Ensure wrist stays locked
+            target_joints[3] = np.pi / 2
+            target_joints[4] = np.pi / 2
+            robot.send_action(target_joints, 1.0)  # Open gripper
+            time.sleep(dt)
+
+            ik.sync_joint_positions(robot.get_joint_positions_radians())
+            ee_pos = ik.get_ee_position()
+            error = np.linalg.norm(target_pos - ee_pos)
+            if error < 0.01:  # Within 1cm
+                break
+
+        return ee_pos
+
     try:
         for episode in range(args.num_episodes):
             print(f"\n--- Episode {episode + 1}/{args.num_episodes} ---")
+
+            # Step 1: Reset to safe extended position
+            print("  Step 1: Safe extended position...")
+            robot.send_action(SAFE_JOINTS, 1.0)  # Open gripper
+            time.sleep(1.5)
+
+            # Step 2: Set wrist joints to π/2 for top-down orientation
+            print("  Step 2: Setting top-down wrist orientation...")
+            topdown_joints = robot.get_joint_positions_radians().copy()
+            topdown_joints[3] = np.pi / 2
+            topdown_joints[4] = np.pi / 2
+            robot.send_action(topdown_joints, 1.0)
+            time.sleep(1.0)
+
+            # Step 3: Move to training initial position (above cube) with wrist locked
+            print("  Step 3: Moving above cube position...")
+            initial_target = np.array([
+                args.cube_x,
+                args.cube_y + FINGER_WIDTH_OFFSET,
+                CUBE_Z + GRASP_Z_OFFSET + HEIGHT_OFFSET
+            ])
+            print(f"    Target: {initial_target}")
+
+            ee_pos = move_to_initial_pose_with_wrist_lock(robot, ik, initial_target)
+            print(f"    Reached: {ee_pos}")
 
             # Reset buffers
             state_buffer.clear()
