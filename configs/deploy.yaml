@@ -1,0 +1,40 @@
+# Deployment configuration for sim-to-real transfer
+
+# Camera settings
+camera:
+  index: 0  # /dev/video0 (gripper camera)
+  target_size: [84, 84]  # Must match sim training
+  frame_stack: 3  # Must match sim training
+  sim_fov: 75.0  # Approximate sim camera FOV
+  real_fov: 130.0  # innoMaker camera diagonal FOV
+
+# Robot settings
+robot:
+  port: /dev/ttyACM0
+  id: ggando_so101_follower
+  control_rate: 20  # Hz
+
+# Policy settings
+policy:
+  # Update this path to point to your trained checkpoint
+  checkpoint: /home/gota/ggando/ml/pick-101/runs/image_rl/20260101_204513/snapshots/best_snapshot.pt
+  device: cuda
+  action_scale: 0.02  # 2cm per action unit (must match sim)
+
+# Safety settings
+safety:
+  max_joint_velocity: 1.0  # rad/s
+  workspace_bounds:
+    x: [0.1, 0.5]
+    y: [-0.3, 0.3]
+    z: [0.01, 0.4]
+
+# Episode settings
+episode:
+  max_steps: 200
+  num_episodes: 5
+
+# Low-dim state configuration
+# NOTE: cube_pos is NOT available on real robot without vision detection
+low_dim_state:
+  include_cube_pos: false  # Set to true if using vision to detect cube
