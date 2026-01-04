@@ -157,74 +157,82 @@ def main():
 
     # Safe starting pose (extended forward) and rest pose (folded near base)
     SAFE_JOINTS = np.zeros(5)  # Extended forward - safe for IK movements
-    REST_JOINTS = np.array([-0.247, -1.8132, 1.6812, 1.2187, -2.9821])  # Folded rest
+    REST_JOINTS = np.array([-0.2424, -1.8040, 1.6582, 0.7309, -0.0629])  # Folded rest
 
-    print("\n[3/3] Moving to positions...")
-    print("  Step 1: Safe extended position...")
-    robot.send_action(SAFE_JOINTS, 1.0)  # Open gripper
-    time.sleep(1.5)
+    def safe_return():
+        """Safe return sequence: lift up first, then go to rest position."""
+        print("\nSafe return sequence...")
 
-    # Get current state
-    joint_pos = robot.get_joint_positions_radians()
-    ik.sync_joint_positions(joint_pos)
-    ee_pos = ik.get_ee_position()
-    print(f"  Current EE: {ee_pos}")
-
-    # Step 1.5: Set wrist joints to π/2 for top-down orientation (matches training)
-    print("  Step 1.5: Setting top-down wrist orientation (joints 3,4 = π/2)...")
-    topdown_joints = robot.get_joint_positions_radians().copy()
-    topdown_joints[3] = np.pi / 2  # wrist_pitch
-    topdown_joints[4] = np.pi / 2  # wrist_roll
-    robot.send_action(topdown_joints, 1.0)
-    time.sleep(1.0)
-
-    joint_pos = robot.get_joint_positions_radians()
-    ik.sync_joint_positions(joint_pos)
-    ee_pos = ik.get_ee_position()
-    print(f"  After wrist setup EE: {ee_pos}")
-    print(f"  Joints: {joint_pos}")
-
-    # Move to above-cube position (lock wrist joints at π/2)
-    print("  Step 2: Moving above cube position (wrist locked)...")
-    target = above_target
-    for step in range(100):
+        # Step 1: Lift up to safe height (keep wrist orientation)
+        print("  Lifting to safe height...")
         current_joints = robot.get_joint_positions_radians()
-        # Lock wrist joints 3,4 at π/2 during IK
-        current_joints[3] = np.pi / 2
-        current_joints[4] = np.pi / 2
-        # Multiple IK iterations per step for better convergence
-        for _ in range(3):
-            target_joints = ik.compute_ik(target, current_joints, locked_joints=[3, 4])
-            current_joints = target_joints
-        # Ensure wrist stays locked
-        target_joints[3] = np.pi / 2
-        target_joints[4] = np.pi / 2
-        robot.send_action(target_joints, 1.0)
-        time.sleep(0.05)
+        ik.sync_joint_positions(current_joints)
+        current_ee = ik.get_ee_position()
+        safe_height_target = current_ee.copy()
+        safe_height_target[2] = 0.15  # Lift to 15cm
 
-        ik.sync_joint_positions(robot.get_joint_positions_radians())
-        ee_pos = ik.get_ee_position()
-        error = np.linalg.norm(target - ee_pos)
-        if step % 20 == 0:
-            print(f"    Step {step}: EE={ee_pos}, error={error*1000:.1f}mm")
-        if error < 0.008:  # Within 8mm
-            break
-
-    print(f"  Reached: {ee_pos}")
-    print(f"  Error: {np.linalg.norm(target - ee_pos)*1000:.1f}mm")
-    print(f"  Joints: {robot.get_joint_positions_radians()}")
-
-    if args.lower:
-        print("\n  Step 3: Lowering to grasp height (wrist locked)...")
-        time.sleep(0.5)
-        target = grasp_target
-        for step in range(60):
+        for step in range(40):
             current_joints = robot.get_joint_positions_radians()
             current_joints[3] = np.pi / 2
             current_joints[4] = np.pi / 2
+            target_joints = ik.compute_ik(safe_height_target, current_joints, locked_joints=[3, 4])
+            target_joints[3] = np.pi / 2
+            target_joints[4] = np.pi / 2
+            robot.send_action(target_joints, 1.0)
+            time.sleep(0.05)
+
+            ik.sync_joint_positions(robot.get_joint_positions_radians())
+            ee_pos = ik.get_ee_position()
+            if ee_pos[2] > 0.12:  # High enough
+                break
+
+        print(f"  Lifted to: {ik.get_ee_position()}")
+        time.sleep(0.3)
+
+        # Step 2: Return to rest position with gripper closed
+        print("  Returning to rest position...")
+        robot.send_action(REST_JOINTS, -1.0)  # Close gripper at rest
+        time.sleep(1.0)
+
+    try:
+        print("\n[3/3] Moving to positions...")
+        print("  Step 1: Safe extended position...")
+        robot.send_action(SAFE_JOINTS, 1.0)  # Open gripper
+        time.sleep(1.5)
+
+        # Get current state
+        joint_pos = robot.get_joint_positions_radians()
+        ik.sync_joint_positions(joint_pos)
+        ee_pos = ik.get_ee_position()
+        print(f"  Current EE: {ee_pos}")
+
+        # Step 1.5: Set wrist joints to π/2 for top-down orientation (matches training)
+        print("  Step 1.5: Setting top-down wrist orientation (joints 3,4 = π/2)...")
+        topdown_joints = robot.get_joint_positions_radians().copy()
+        topdown_joints[3] = np.pi / 2  # wrist_pitch
+        topdown_joints[4] = np.pi / 2  # wrist_roll
+        robot.send_action(topdown_joints, 1.0)
+        time.sleep(1.0)
+
+        joint_pos = robot.get_joint_positions_radians()
+        ik.sync_joint_positions(joint_pos)
+        ee_pos = ik.get_ee_position()
+        print(f"  After wrist setup EE: {ee_pos}")
+        print(f"  Joints: {joint_pos}")
+
+        # Move to above-cube position (lock wrist joints at π/2)
+        print("  Step 2: Moving above cube position (wrist locked)...")
+        target = above_target
+        for step in range(100):
+            current_joints = robot.get_joint_positions_radians()
+            # Lock wrist joints 3,4 at π/2 during IK
+            current_joints[3] = np.pi / 2
+            current_joints[4] = np.pi / 2
+            # Multiple IK iterations per step for better convergence
             for _ in range(3):
                 target_joints = ik.compute_ik(target, current_joints, locked_joints=[3, 4])
                 current_joints = target_joints
+            # Ensure wrist stays locked
             target_joints[3] = np.pi / 2
             target_joints[4] = np.pi / 2
             robot.send_action(target_joints, 1.0)
@@ -235,71 +243,70 @@ def main():
             error = np.linalg.norm(target - ee_pos)
             if step % 20 == 0:
                 print(f"    Step {step}: EE={ee_pos}, error={error*1000:.1f}mm")
-            if error < 0.008:
+            if error < 0.008:  # Within 8mm
                 break
 
         print(f"  Reached: {ee_pos}")
         print(f"  Error: {np.linalg.norm(target - ee_pos)*1000:.1f}mm")
         print(f"  Joints: {robot.get_joint_positions_radians()}")
 
-    # Record final position
-    final_joints = robot.get_joint_positions_radians()
-    ik.sync_joint_positions(final_joints)
-    final_ee = ik.get_ee_position()
+        if args.lower:
+            print("\n  Step 3: Lowering to grasp height (wrist locked)...")
+            time.sleep(0.5)
+            target = grasp_target
+            for step in range(60):
+                current_joints = robot.get_joint_positions_radians()
+                current_joints[3] = np.pi / 2
+                current_joints[4] = np.pi / 2
+                for _ in range(3):
+                    target_joints = ik.compute_ik(target, current_joints, locked_joints=[3, 4])
+                    current_joints = target_joints
+                target_joints[3] = np.pi / 2
+                target_joints[4] = np.pi / 2
+                robot.send_action(target_joints, 1.0)
+                time.sleep(0.05)
 
-    # Hold position
-    print("\n" + "=" * 60)
-    print("HOLDING POSITION - Mark the cube location on your table!")
-    print("The gripper center is at the expected cube position.")
-    print("=" * 60)
-    print(f"\nFinal EE position: {final_ee}")
-    print(f"Final joints (rad): {final_joints}")
-    print(f"\nTo use this position:")
-    print(f"  joints = np.array({list(final_joints)})")
-    print(f"  ee_pos = np.array({list(final_ee)})")
-    print("\nPress Enter to return to home, or Ctrl+C to exit...")
+                ik.sync_joint_positions(robot.get_joint_positions_radians())
+                ee_pos = ik.get_ee_position()
+                error = np.linalg.norm(target - ee_pos)
+                if step % 20 == 0:
+                    print(f"    Step {step}: EE={ee_pos}, error={error*1000:.1f}mm")
+                if error < 0.008:
+                    break
 
-    try:
-        input()
+            print(f"  Reached: {ee_pos}")
+            print(f"  Error: {np.linalg.norm(target - ee_pos)*1000:.1f}mm")
+            print(f"  Joints: {robot.get_joint_positions_radians()}")
+
+        # Record final position
+        final_joints = robot.get_joint_positions_radians()
+        ik.sync_joint_positions(final_joints)
+        final_ee = ik.get_ee_position()
+
+        # Hold position
+        print("\n" + "=" * 60)
+        print("HOLDING POSITION - Mark the cube location on your table!")
+        print("The gripper center is at the expected cube position.")
+        print("=" * 60)
+        print(f"\nFinal EE position: {final_ee}")
+        print(f"Final joints (rad): {final_joints}")
+        print(f"\nTo use this position:")
+        print(f"  joints = np.array({list(final_joints)})")
+        print(f"  ee_pos = np.array({list(final_ee)})")
+        print("\nPress Enter to return to home, or Ctrl+C to exit...")
+
+        try:
+            input()
+        except KeyboardInterrupt:
+            print("\nInterrupted")
+
     except KeyboardInterrupt:
-        print("\nInterrupted")
+        print("\nInterrupted during movement")
 
-    # Safe return sequence: lift up first, then retract
-    print("\nSafe return sequence...")
-
-    # Step 1: Lift up to safe height (keep wrist orientation)
-    print("  Lifting to safe height...")
-    current_joints = robot.get_joint_positions_radians()
-    ik.sync_joint_positions(current_joints)
-    current_ee = ik.get_ee_position()
-    safe_height_target = current_ee.copy()
-    safe_height_target[2] = 0.15  # Lift to 15cm
-
-    for step in range(40):
-        current_joints = robot.get_joint_positions_radians()
-        current_joints[3] = np.pi / 2
-        current_joints[4] = np.pi / 2
-        target_joints = ik.compute_ik(safe_height_target, current_joints, locked_joints=[3, 4])
-        target_joints[3] = np.pi / 2
-        target_joints[4] = np.pi / 2
-        robot.send_action(target_joints, 1.0)
-        time.sleep(0.05)
-
-        ik.sync_joint_positions(robot.get_joint_positions_radians())
-        ee_pos = ik.get_ee_position()
-        if ee_pos[2] > 0.12:  # High enough
-            break
-
-    print(f"  Lifted to: {ik.get_ee_position()}")
-    time.sleep(0.3)
-
-    # Step 2: Return to rest position
-    print("  Returning to rest position...")
-    robot.send_action(REST_JOINTS, 1.0)
-    time.sleep(1.0)
-
-    robot.disconnect()
-    print("Done.")
+    finally:
+        safe_return()
+        robot.disconnect()
+        print("Done.")
 
 
 if __name__ == "__main__":

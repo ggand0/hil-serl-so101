@@ -191,7 +191,7 @@ def main():
 
     # Safe positions
     SAFE_JOINTS = np.zeros(5)  # Extended forward - safe for IK movements
-    REST_JOINTS = np.array([-0.247, -1.8132, 1.6812, 1.2187, -2.9821])  # Folded rest
+    REST_JOINTS = np.array([-0.2424, -1.8040, 1.6582, 0.7309, -0.0629])  # Folded rest
 
     def move_to_initial_pose_with_wrist_lock(robot, ik, target_pos, num_steps=100, dt=0.05):
         """Move robot to target EE position using IK with wrist locked at π/2."""
