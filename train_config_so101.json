@@ -4,7 +4,7 @@
     "device": "cuda",
     "temperature_init": 0.01,
     "actor_learner_config": {
-      "policy_parameters_push_frequency": 2.0
+      "policy_parameters_push_frequency": 2
     },
     "storage_device": "cuda",
     "input_features": {
@@ -28,7 +28,7 @@
     "type": "gym_manipulator",
     "fps": 10,
     "robot": {
-      "type": "so101_follower",
+      "type": "so101_follower_end_effector",
       "port": "/dev/ttyACM0",
       "id": "ggando_so101_follower",
       "disable_torque_on_disconnect": true,
@@ -36,8 +36,8 @@
       "urdf_path": "/home/gota/ggando/ml/so101-playground/models/so101_new_calib.urdf",
       "target_frame_name": "gripper_frame_link",
       "end_effector_bounds": {
-        "min": [-0.5, -0.5, 0.0],
-        "max": [0.5, 0.5, 0.5]
+        "min": [0.1657, -0.0345, -0.0026],
+        "max": [0.185, 0.0051, 0.0096]
       },
       "end_effector_step_sizes": {
         "x": 0.02,
@@ -47,7 +47,7 @@
       "cameras": {
         "gripper_cam": {
           "type": "opencv",
-          "index": "/dev/video0",
+          "index_or_path": "/dev/video0",
           "fps": 30,
           "width": 640,
           "height": 480
@@ -75,8 +75,7 @@
     }
   },
   "dataset": {
-    "repo_id": "ggando/so101_pick_lift_cube",
-    "task": "pick_and_lift"
+    "repo_id": "ggando/so101_pick_lift_cube"
   },
   "wandb": {
     "enable": true,
