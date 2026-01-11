@@ -415,13 +415,15 @@ def main():
                         external_writer.write(cropped)
 
                 # Get single low_dim state (no stacking for PPO)
+                # PPO expects 18 dims: joint_pos(6) + joint_vel(6) + gripper_pos(3) + gripper_euler(3)
+                # LowDimStateBuilder outputs 21 dims (includes 3 zeros for cube_pos), so slice to 18
                 low_dim_obs = state_builder.build(
                     joint_pos=joint_pos_rad,
                     joint_vel=joint_vel,
                     gripper_pos=ee_pos,
                     gripper_euler=ee_euler,
                     gripper_state=gripper_state,
-                ).astype(np.float32)
+                ).astype(np.float32)[:18]  # PPO trained with 18-dim state (no cube_pos)
 
                 # Get action from policy (single frame input)
                 action = policy.get_action(rgb_obs, low_dim_obs)
