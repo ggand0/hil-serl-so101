@@ -175,6 +175,14 @@ def main():
         help="NPY file with sim low_dim_states (N, 18) to use instead of real robot state. "
              "Use with --sim_frames_dir for full sim observation playback.",
     )
+    parser.add_argument(
+        "--genesis_to_mujoco",
+        action="store_true",
+        help="Transform actions from Genesis frame to MuJoCo frame. "
+             "Genesis: X=sideways, -Y=forward, Z=up. "
+             "MuJoCo: X=forward, Y=sideways, Z=up. "
+             "Transformation: MuJoCo_X=-Genesis_Y, MuJoCo_Y=Genesis_X",
+    )
 
     args = parser.parse_args()
 
@@ -189,6 +197,10 @@ def main():
         print("Failed to load policy. Exiting.")
         return
     print(f"  PPO policy loaded (single frame, no stacking)")
+    if args.genesis_to_mujoco:
+        print(f"  [FRAME TRANSFORM] Genesis→MuJoCo coordinate transformation enabled")
+        print(f"    Genesis: X=sideways, -Y=forward, Z=up")
+        print(f"    MuJoCo:  X=forward, Y=sideways, Z=up")
 
     # === Load sim frames if provided (for sim2real diagnostic) ===
     sim_frames = None
@@ -623,18 +635,50 @@ def main():
                 delta_xyz = action[:3].copy()  # In [-1, 1], will be scaled
                 gripper_action = action[3]  # -1 = closed, 1 = open
 
-                # Flip Y if coordinate system mismatch
+                # Flip Y if coordinate system mismatch (simple flip)
                 if args.flip_y:
                     delta_xyz[1] = -delta_xyz[1]
 
+                # Transform from Genesis frame to MuJoCo frame (90° rotation)
+                # Genesis: X=sideways, -Y=forward, Z=up (robot at y=0.314 facing -Y toward y=0)
+                # MuJoCo:  X=forward, Y=sideways, Z=up (robot at origin facing +X)
+                if args.genesis_to_mujoco:
+                    genesis_x, genesis_y, genesis_z = delta_xyz
+                    delta_xyz = np.array([
+                        -genesis_y,  # MuJoCo X (forward) = -Genesis Y (forward in Genesis is -Y)
+                        genesis_x,   # MuJoCo Y (sideways) = Genesis X
+                        genesis_z,   # Z unchanged
+                    ])
+                    if args.debug_state and step < 10:
+                        print(f"    [DEBUG] Transformed: genesis({genesis_x:.3f},{genesis_y:.3f},{genesis_z:.3f}) → mujoco({delta_xyz[0]:.3f},{delta_xyz[1]:.3f},{delta_xyz[2]:.3f})")
+
                 # Use IK to convert Cartesian action to joint targets
-                current_joints = robot.get_joint_positions_radians()
+                current_joints_raw = robot.get_joint_positions_radians()
+                # Apply joint offset for accurate IK (sensor reads ~12.5° off on elbow)
+                current_joints = apply_joint_offset(current_joints_raw)
+
+                # Debug: show IK target position
+                ik.sync_joint_positions(current_joints)
+                current_ee = ik.get_ee_position()
+                target_ee = current_ee + delta_xyz * args.action_scale
+
                 target_joints = ik.cartesian_to_joints(
                     delta_xyz,
                     current_joints,
                     action_scale=args.action_scale,
-                    locked_joints=[4],  # Lock wrist_roll for stability
+                    locked_joints=[3, 4],  # Lock wrist joints for stability (same as reset)
                 )
+
+                # Convert back from corrected joints to raw joints for robot command
+                # (undo the offset so robot receives correct sensor-space targets)
+                target_joints[2] -= ELBOW_FLEX_OFFSET_RAD
+
+                # Debug: show joint changes
+                if args.debug_state and step < 5:
+                    joint_diff = target_joints - current_joints_raw  # Compare raw to raw
+                    print(f"    [IK DEBUG] current_ee=[{current_ee[0]:.4f},{current_ee[1]:.4f},{current_ee[2]:.4f}]")
+                    print(f"    [IK DEBUG] target_ee=[{target_ee[0]:.4f},{target_ee[1]:.4f},{target_ee[2]:.4f}]")
+                    print(f"    [IK DEBUG] joint_diff={joint_diff}")
 
                 # Send action to robot
                 if not args.dry_run:
@@ -650,11 +694,11 @@ def main():
                 ee_pos = ik.get_ee_position()
                 ee_euler = ik.get_ee_euler()
 
-                # Status
-                if step % 20 == 0:
+                # Status - show full EE position to track motion
+                if step % 10 == 0:
                     print(
-                        f"  Step {step}: delta={delta_xyz} "
-                        f"gripper={gripper_action:.2f} ee_z={ee_pos[2]:.3f}"
+                        f"  Step {step}: delta=[{delta_xyz[0]:.2f},{delta_xyz[1]:.2f},{delta_xyz[2]:.2f}] "
+                        f"gripper={gripper_action:.2f} ee=[{ee_pos[0]:.3f},{ee_pos[1]:.3f},{ee_pos[2]:.3f}]"
                     )
 
                 # Control rate
