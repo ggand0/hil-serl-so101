@@ -123,6 +123,58 @@ def main():
         default=None,
         help="External camera index for third-person view recording",
     )
+    parser.add_argument(
+        "--flip_y",
+        action="store_true",
+        help="Flip Y-axis of actions (for coordinate system mismatch debugging)",
+    )
+    parser.add_argument(
+        "--save_obs",
+        action="store_true",
+        help="Save observation images to debug visual mismatch",
+    )
+    parser.add_argument(
+        "--rotate_image",
+        type=int,
+        default=0,
+        choices=[0, 90, 180, 270],
+        help="Rotate camera image by degrees (for orientation mismatch)",
+    )
+    parser.add_argument(
+        "--save_obs_video",
+        type=str,
+        default=None,
+        help="Save observation images as video (path to output .mp4)",
+    )
+    parser.add_argument(
+        "--debug_state",
+        action="store_true",
+        help="Print verbose state/action debug info at each step",
+    )
+    parser.add_argument(
+        "--genesis_wrist",
+        action="store_true",
+        help="Use Genesis wrist configuration (joint[4]=+π/2 instead of -π/2)",
+    )
+    parser.add_argument(
+        "--fix_euler",
+        action="store_true",
+        help="Transform euler angles to match Genesis (compensate for wrist_roll π difference)",
+    )
+    parser.add_argument(
+        "--sim_frames_dir",
+        type=str,
+        default=None,
+        help="Directory with pre-recorded sim frames (PNG/NPY) to use instead of real camera. "
+             "If policy works with sim frames but not real frames, proves visual sim2real gap.",
+    )
+    parser.add_argument(
+        "--sim_states_file",
+        type=str,
+        default=None,
+        help="NPY file with sim low_dim_states (N, 18) to use instead of real robot state. "
+             "Use with --sim_frames_dir for full sim observation playback.",
+    )
 
     args = parser.parse_args()
 
@@ -137,6 +189,50 @@ def main():
         print("Failed to load policy. Exiting.")
         return
     print(f"  PPO policy loaded (single frame, no stacking)")
+
+    # === Load sim frames if provided (for sim2real diagnostic) ===
+    sim_frames = None
+    sim_states = None
+    if args.sim_frames_dir:
+        sim_frames_dir = Path(args.sim_frames_dir)
+        if not sim_frames_dir.exists():
+            print(f"ERROR: Sim frames directory not found: {sim_frames_dir}")
+            return
+
+        # Load frames (sorted by filename)
+        frame_files = sorted(list(sim_frames_dir.glob("*.png")) + list(sim_frames_dir.glob("*.npy")))
+        if len(frame_files) == 0:
+            print(f"ERROR: No PNG/NPY files found in {sim_frames_dir}")
+            return
+
+        print(f"\n[SIM2REAL TEST] Loading {len(frame_files)} frames from {sim_frames_dir}")
+        sim_frames = []
+        for f in frame_files:
+            if f.suffix == ".npy":
+                # Direct numpy array (C, H, W) uint8
+                frame = np.load(f)
+            else:
+                # PNG image - load and convert
+                img_bgr = cv2.imread(str(f))
+                img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+                # Resize to 84x84 if needed
+                if img_rgb.shape[:2] != (84, 84):
+                    img_rgb = cv2.resize(img_rgb, (84, 84), interpolation=cv2.INTER_AREA)
+                # HWC -> CHW
+                frame = np.transpose(img_rgb, (2, 0, 1)).astype(np.uint8)
+            sim_frames.append(frame)
+        sim_frames = np.array(sim_frames)
+        print(f"  Loaded frames shape: {sim_frames.shape}")
+
+    if args.sim_states_file:
+        sim_states_path = Path(args.sim_states_file)
+        if not sim_states_path.exists():
+            print(f"ERROR: Sim states file not found: {sim_states_path}")
+            return
+        sim_states = np.load(sim_states_path)
+        print(f"  Loaded sim states shape: {sim_states.shape}")
+
+    use_sim_obs = sim_frames is not None
 
     # === 2. Initialize Camera ===
     print("\n[2/4] Initializing camera...")
@@ -221,6 +317,13 @@ def main():
     # Control timing
     control_dt = 1.0 / args.control_hz
 
+    # Observation video writer
+    obs_video_writer = None
+    if args.save_obs_video:
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        obs_video_writer = cv2.VideoWriter(args.save_obs_video, fourcc, args.control_hz, (84, 84))
+        print(f"[Debug] Saving observation video to {args.save_obs_video}")
+
     print("\n" + "=" * 60)
     print("Ready to run. Press Ctrl+C to stop.")
     print("=" * 60)
@@ -232,6 +335,7 @@ def main():
     GRASP_Z_OFFSET = 0.005        # Grasp point slightly above cube center
     CUBE_Z = 0.015                # Cube height on table
     # Genesis reset target: (0.25, -0.015, 0.02) = at grasp height, NOT above cube
+    RESET_GRIPPER = 0.3           # Genesis uses 0.3 (partially open) during reset, not 1.0
 
     # Joint offset correction (from kinematic verification devlog 032)
     # elbow_flex (joint 2) reads ~12.5° more bent than actual physical position
@@ -247,21 +351,22 @@ def main():
         corrected[2] += ELBOW_FLEX_OFFSET_RAD  # elbow_flex correction
         return corrected
 
-    def move_to_initial_pose_with_wrist_lock(robot, ik, target_pos, num_steps=100, dt=0.05):
+    def move_to_initial_pose_with_wrist_lock(robot, ik, target_pos, use_genesis_wrist=False, num_steps=100, dt=0.05):
         """Move robot to target EE position using IK with wrist locked at π/2."""
+        wrist_roll = np.pi / 2 if use_genesis_wrist else -np.pi / 2
         for step in range(num_steps):
             current_joints = robot.get_joint_positions_radians()
             # Lock wrist joints at π/2
             current_joints[3] = np.pi / 2
-            current_joints[4] = -np.pi / 2
+            current_joints[4] = wrist_roll
             # Multiple IK iterations for better convergence
             for _ in range(3):
                 target_joints = ik.compute_ik(target_pos, current_joints, locked_joints=[3, 4])
                 current_joints = target_joints
             # Ensure wrist stays locked
             target_joints[3] = np.pi / 2
-            target_joints[4] = -np.pi / 2
-            robot.send_action(target_joints, 1.0)  # Open gripper
+            target_joints[4] = wrist_roll
+            robot.send_action(target_joints, RESET_GRIPPER)  # Partially open (Genesis uses 0.3)
             time.sleep(dt)
 
             ik.sync_joint_positions(apply_joint_offset(robot.get_joint_positions_radians()))
@@ -339,15 +444,20 @@ def main():
 
             # Step 1: Reset to safe extended position
             print("  Step 1: Safe extended position...")
-            robot.send_action(SAFE_JOINTS, 1.0)  # Open gripper
+            robot.send_action(SAFE_JOINTS, RESET_GRIPPER)  # Partially open (Genesis uses 0.3)
             time.sleep(1.5)
 
             # Step 2: Set wrist joints to π/2 for top-down orientation
             print("  Step 2: Setting top-down wrist orientation...")
             topdown_joints = robot.get_joint_positions_radians().copy()
             topdown_joints[3] = np.pi / 2
-            topdown_joints[4] = -np.pi / 2  # wrist_roll (flipped for real robot)
-            robot.send_action(topdown_joints, 1.0)
+            # Genesis uses +π/2 for wrist_roll, real robot calibration uses -π/2
+            if args.genesis_wrist:
+                topdown_joints[4] = np.pi / 2   # Genesis configuration
+                print("    Using Genesis wrist config: joint[4]=+π/2")
+            else:
+                topdown_joints[4] = -np.pi / 2  # Real robot default
+            robot.send_action(topdown_joints, RESET_GRIPPER)  # Partially open (Genesis uses 0.3)
             time.sleep(1.0)
 
             # Step 3: Move to training initial position (at grasp height) with wrist locked
@@ -360,7 +470,7 @@ def main():
             ])
             print(f"    Target: {initial_target}")
 
-            ee_pos = move_to_initial_pose_with_wrist_lock(robot, ik, initial_target)
+            ee_pos = move_to_initial_pose_with_wrist_lock(robot, ik, initial_target, use_genesis_wrist=args.genesis_wrist)
             print(f"    Reached: {ee_pos}")
 
             # Reset camera buffer (for PPO, just warm up since no stacking needed)
@@ -385,17 +495,54 @@ def main():
             print(f"  Initial joints (rad): {joint_pos_rad}")
 
             # Episode loop (no frame buffer needed for PPO - single frame)
+            # Track global step for sim frame indexing
+            global_step = episode * args.episode_length
+
             for step in range(args.episode_length):
                 step_start = time.time()
 
                 # Get single RGB frame (no stacking for PPO)
-                if use_mock_camera:
+                if use_sim_obs:
+                    # Use pre-recorded sim frames for sim2real diagnostic
+                    frame_idx = (global_step + step) % len(sim_frames)
+                    rgb_obs = sim_frames[frame_idx].copy()
+                    if step == 0:
+                        print(f"  [SIM2REAL TEST] Using sim frame {frame_idx}/{len(sim_frames)}")
+                elif use_mock_camera:
                     rgb_obs = np.random.randint(0, 256, (3, 84, 84), dtype=np.uint8)
                 else:
                     rgb_obs = camera.capture_and_preprocess()
                     if rgb_obs is None:
                         print("  Camera frame error, ending episode")
                         break
+
+                    # Apply image rotation if specified (for camera orientation mismatch)
+                    if args.rotate_image != 0:
+                        # CHW -> HWC for rotation
+                        img_hwc = np.transpose(rgb_obs, (1, 2, 0))
+                        if args.rotate_image == 90:
+                            img_hwc = cv2.rotate(img_hwc, cv2.ROTATE_90_CLOCKWISE)
+                        elif args.rotate_image == 180:
+                            img_hwc = cv2.rotate(img_hwc, cv2.ROTATE_180)
+                        elif args.rotate_image == 270:
+                            img_hwc = cv2.rotate(img_hwc, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                        # HWC -> CHW
+                        rgb_obs = np.transpose(img_hwc, (2, 0, 1))
+
+                    # Save observation image for debugging visual mismatch
+                    if args.save_obs and step < 5:
+                        # Convert CHW to HWC for saving
+                        img_hwc = np.transpose(rgb_obs, (1, 2, 0))
+                        # Convert RGB to BGR for cv2
+                        img_bgr = cv2.cvtColor(img_hwc, cv2.COLOR_RGB2BGR)
+                        cv2.imwrite(f"ppo_obs_ep{episode+1}_step{step}.png", img_bgr)
+                        print(f"    Saved observation: ppo_obs_ep{episode+1}_step{step}.png")
+
+                    # Write to observation video
+                    if obs_video_writer is not None:
+                        img_hwc = np.transpose(rgb_obs, (1, 2, 0))
+                        img_bgr = cv2.cvtColor(img_hwc, cv2.COLOR_RGB2BGR)
+                        obs_video_writer.write(img_bgr)
 
                     # Record wrist camera (get raw frame for higher quality)
                     if wrist_writer is not None:
@@ -417,23 +564,65 @@ def main():
                 # Get single low_dim state (no stacking for PPO)
                 # PPO expects 18 dims: joint_pos(6) + joint_vel(6) + gripper_pos(3) + gripper_euler(3)
                 # LowDimStateBuilder outputs 21 dims (includes 3 zeros for cube_pos), so slice to 18
-                low_dim_obs = state_builder.build(
-                    joint_pos=joint_pos_rad,
-                    joint_vel=joint_vel,
-                    gripper_pos=ee_pos,
-                    gripper_euler=ee_euler,
-                    gripper_state=gripper_state,
-                ).astype(np.float32)[:18]  # PPO trained with 18-dim state (no cube_pos)
+
+                if sim_states is not None:
+                    # Use pre-recorded sim states for full sim observation playback
+                    state_idx = (global_step + step) % len(sim_states)
+                    low_dim_obs = sim_states[state_idx].astype(np.float32)
+                    if step == 0:
+                        print(f"  [SIM2REAL TEST] Using sim state {state_idx}/{len(sim_states)}")
+                else:
+                    # Transform euler angles if needed to compensate for wrist_roll π difference
+                    euler_for_policy = ee_euler.copy()
+                    if args.fix_euler:
+                        # Genesis uses joint[4]=+π/2, real robot uses -π/2
+                        # This π difference affects the yaw component
+                        # Transform: wrap yaw by subtracting π (or adding, depending on direction)
+                        euler_for_policy[2] = ee_euler[2] - np.pi  # Adjust yaw
+                        # Also flip the roll sign to account for flipped frame
+                        euler_for_policy[0] = -ee_euler[0]
+                        # Normalize to [-π, π]
+                        euler_for_policy[2] = np.arctan2(np.sin(euler_for_policy[2]), np.cos(euler_for_policy[2]))
+
+                    low_dim_obs = state_builder.build(
+                        joint_pos=joint_pos_rad,
+                        joint_vel=joint_vel,
+                        gripper_pos=ee_pos,
+                        gripper_euler=euler_for_policy,
+                        gripper_state=gripper_state,
+                    ).astype(np.float32)[:18]  # PPO trained with 18-dim state (no cube_pos)
+
+                # Debug state output
+                if args.debug_state and step == 0:
+                    print("\n  [DEBUG] Low-dim state breakdown (step 0):")
+                    print(f"    joint_pos (6): {low_dim_obs[0:6]}")
+                    print(f"    joint_vel (6): {low_dim_obs[6:12]}")
+                    print(f"    gripper_pos (3): {low_dim_obs[12:15]}")
+                    print(f"    gripper_euler (3): {low_dim_obs[15:18]}")
+                    print(f"    Full state vector: {low_dim_obs}")
+                    print("\n  [DEBUG] Genesis expected values at reset:")
+                    print(f"    gripper_pos: ~[0.25, -0.015, 0.02] (at grasp height)")
+                    print(f"    wrist joints: joint[3]=π/2, joint[4]=π/2 (Genesis)")
+                    print(f"    Real robot:   joint[3]=π/2, joint[4]=-π/2 (inverted!)")
+                    print(f"    This inversion may cause euler angle mismatch!")
 
                 # Get action from policy (single frame input)
                 action = policy.get_action(rgb_obs, low_dim_obs)
+
+                # Debug action output
+                if args.debug_state and step < 10:
+                    print(f"    [DEBUG] Step {step}: raw_action={action} (before clipping)")
 
                 # Clip action to [-1, 1] for safety
                 action = np.clip(action, -1.0, 1.0)
 
                 # Parse action
-                delta_xyz = action[:3]  # In [-1, 1], will be scaled
+                delta_xyz = action[:3].copy()  # In [-1, 1], will be scaled
                 gripper_action = action[3]  # -1 = closed, 1 = open
+
+                # Flip Y if coordinate system mismatch
+                if args.flip_y:
+                    delta_xyz[1] = -delta_xyz[1]
 
                 # Use IK to convert Cartesian action to joint targets
                 current_joints = robot.get_joint_positions_radians()
@@ -489,6 +678,9 @@ def main():
 
     finally:
         print("\nCleaning up...")
+        if obs_video_writer is not None:
+            obs_video_writer.release()
+            print(f"  Saved observation video: {args.save_obs_video}")
         if camera is not None:
             camera.close()
         if external_cap is not None:
