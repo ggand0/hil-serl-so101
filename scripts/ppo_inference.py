@@ -199,20 +199,23 @@ def main():
             print(f"ERROR: Sim frames directory not found: {sim_frames_dir}")
             return
 
-        # Load frames (sorted by filename)
-        frame_files = sorted(list(sim_frames_dir.glob("*.png")) + list(sim_frames_dir.glob("*.npy")))
-        if len(frame_files) == 0:
-            print(f"ERROR: No PNG/NPY files found in {sim_frames_dir}")
-            return
+        print(f"\n[SIM2REAL TEST] Loading frames from {sim_frames_dir}")
 
-        print(f"\n[SIM2REAL TEST] Loading {len(frame_files)} frames from {sim_frames_dir}")
-        sim_frames = []
-        for f in frame_files:
-            if f.suffix == ".npy":
-                # Direct numpy array (C, H, W) uint8
-                frame = np.load(f)
-            else:
-                # PNG image - load and convert
+        # Check for batch frames.npy first (preferred)
+        frames_npy = sim_frames_dir / "frames.npy"
+        if frames_npy.exists():
+            sim_frames = np.load(frames_npy)
+            print(f"  Loaded frames.npy: {sim_frames.shape}")
+        else:
+            # Fall back to individual PNGs
+            frame_files = sorted(sim_frames_dir.glob("*.png"))
+            if len(frame_files) == 0:
+                print(f"ERROR: No frames.npy or PNG files found in {sim_frames_dir}")
+                return
+
+            print(f"  Loading {len(frame_files)} PNG files...")
+            sim_frames = []
+            for f in frame_files:
                 img_bgr = cv2.imread(str(f))
                 img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
                 # Resize to 84x84 if needed
@@ -220,9 +223,9 @@ def main():
                     img_rgb = cv2.resize(img_rgb, (84, 84), interpolation=cv2.INTER_AREA)
                 # HWC -> CHW
                 frame = np.transpose(img_rgb, (2, 0, 1)).astype(np.uint8)
-            sim_frames.append(frame)
-        sim_frames = np.array(sim_frames)
-        print(f"  Loaded frames shape: {sim_frames.shape}")
+                sim_frames.append(frame)
+            sim_frames = np.array(sim_frames)
+            print(f"  Loaded frames shape: {sim_frames.shape}")
 
     if args.sim_states_file:
         sim_states_path = Path(args.sim_states_file)
