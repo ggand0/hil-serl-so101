@@ -1,6 +1,6 @@
 """Policy loading and inference for sim-to-real transfer.
 
-Loads a trained DrQ-v2 checkpoint and runs inference.
+Loads trained checkpoints (DrQ-v2 or Genesis PPO) and runs inference.
 """
 
 import sys
@@ -9,6 +9,8 @@ from typing import Any, Optional
 
 import numpy as np
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 # Add pick-101 paths for robobase and training modules
 pick101_root = Path("/home/gota/ggando/ml/pick-101")
@@ -255,3 +257,189 @@ class LowDimStateBuilder:
     @property
     def state_dim(self) -> int:
         return self._state_dim
+
+
+# =============================================================================
+# Genesis PPO Model Classes
+# =============================================================================
+
+
+def layer_init(layer: nn.Module, std: float = np.sqrt(2), bias_const: float = 0.0) -> nn.Module:
+    """Initialize layer with orthogonal weights."""
+    torch.nn.init.orthogonal_(layer.weight, std)
+    torch.nn.init.constant_(layer.bias, bias_const)
+    return layer
+
+
+class CNNEncoder(nn.Module):
+    """CNN encoder for image observations (Nature CNN architecture)."""
+
+    def __init__(self, image_channels: int = 3, feature_dim: int = 256):
+        super().__init__()
+        # Standard nature CNN architecture
+        self.conv = nn.Sequential(
+            layer_init(nn.Conv2d(image_channels, 32, 8, stride=4)),
+            nn.ReLU(),
+            layer_init(nn.Conv2d(32, 64, 4, stride=2)),
+            nn.ReLU(),
+            layer_init(nn.Conv2d(64, 64, 3, stride=1)),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+        # For 84x84 input: 64 * 7 * 7 = 3136
+        self.fc = layer_init(nn.Linear(3136, feature_dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, channels, height, width), values in [0, 255]
+        x = x.float() / 255.0
+        x = self.conv(x)
+        x = F.relu(self.fc(x))
+        return x
+
+
+class ActorCritic(nn.Module):
+    """Actor-Critic network with CNN encoder for Genesis PPO."""
+
+    def __init__(
+        self,
+        image_channels: int = 3,
+        low_dim_size: int = 18,
+        action_dim: int = 4,
+        feature_dim: int = 256,
+    ):
+        super().__init__()
+
+        self.cnn_encoder = CNNEncoder(image_channels, feature_dim)
+
+        # Low-dim state encoder
+        self.low_dim_encoder = nn.Sequential(
+            layer_init(nn.Linear(low_dim_size, 64)),
+            nn.ReLU(),
+            layer_init(nn.Linear(64, 64)),
+            nn.ReLU(),
+        )
+
+        # Combined feature size: CNN features + low-dim features
+        combined_dim = feature_dim + 64  # 256 + 64 = 320
+
+        # Actor network
+        self.actor_mean = nn.Sequential(
+            layer_init(nn.Linear(combined_dim, 256)),
+            nn.ReLU(),
+            layer_init(nn.Linear(256, action_dim), std=0.01),
+        )
+        # Learnable log std
+        self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim))
+
+        # Critic network
+        self.critic = nn.Sequential(
+            layer_init(nn.Linear(combined_dim, 256)),
+            nn.ReLU(),
+            layer_init(nn.Linear(256, 1), std=1.0),
+        )
+
+
+class GenesisPPORunner:
+    """Runs inference with a Genesis-trained PPO policy.
+
+    Unlike DrQ-v2, this uses single frames (no frame stacking):
+    - rgb: (3, 84, 84) uint8
+    - low_dim_state: (18,) float32
+
+    Action output:
+    - action: (4,) float32 in [-1, 1]
+    """
+
+    def __init__(
+        self,
+        checkpoint_path: str | Path,
+        device: str = "cuda",
+    ):
+        """Initialize PPO policy runner.
+
+        Args:
+            checkpoint_path: Path to checkpoint .pt file.
+            device: Torch device for inference.
+        """
+        self.checkpoint_path = Path(checkpoint_path)
+        self.device = device
+        self._network = None
+
+    def load(self) -> bool:
+        """Load checkpoint and initialize network.
+
+        Returns:
+            True if loaded successfully.
+        """
+        if not self.checkpoint_path.exists():
+            print(f"Checkpoint not found: {self.checkpoint_path}")
+            return False
+
+        try:
+            checkpoint = torch.load(self.checkpoint_path, map_location="cpu")
+
+            self._network = ActorCritic(
+                image_channels=3,
+                low_dim_size=18,
+                action_dim=4,
+                feature_dim=256,
+            ).to(self.device)
+
+            self._network.load_state_dict(checkpoint['network_state_dict'])
+            self._network.eval()
+
+            print(f"Loaded PPO checkpoint: {self.checkpoint_path}")
+            return True
+
+        except Exception as e:
+            print(f"Failed to load checkpoint: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def get_action(
+        self,
+        rgb: np.ndarray,
+        low_dim_state: np.ndarray,
+    ) -> np.ndarray:
+        """Run inference to get deterministic action.
+
+        Args:
+            rgb: Image observation (3, H, W) uint8.
+            low_dim_state: Low-dim state (18,) float32.
+
+        Returns:
+            Action (4,) float32 in [-1, 1].
+        """
+        if self._network is None:
+            raise RuntimeError("Policy not loaded. Call load() first.")
+
+        with torch.no_grad():
+            # Add batch dimension: (C, H, W) -> (1, C, H, W)
+            rgb_tensor = torch.from_numpy(rgb).unsqueeze(0).to(self.device)
+            state_tensor = torch.from_numpy(low_dim_state).unsqueeze(0).float().to(self.device)
+
+            # Forward through encoders
+            img_features = self._network.cnn_encoder(rgb_tensor)
+            low_dim_features = self._network.low_dim_encoder(state_tensor)
+            features = torch.cat([img_features, low_dim_features], dim=-1)
+
+            # Get deterministic action (mean, no sampling)
+            action = self._network.actor_mean(features)
+
+            return action.squeeze(0).cpu().numpy()
+
+    @property
+    def action_dim(self) -> int:
+        """Action dimension (4: delta XYZ + gripper)."""
+        return 4
+
+    @property
+    def state_dim(self) -> int:
+        """State dimension (18: proprioception only)."""
+        return 18
+
+    @property
+    def frame_stack(self) -> int:
+        """Frame stack (1 for PPO, no stacking)."""
+        return 1
