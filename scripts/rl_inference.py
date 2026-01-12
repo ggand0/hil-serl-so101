@@ -41,10 +41,7 @@ from src.deploy.policy import PolicyRunner, LowDimStateBuilder
 from src.deploy.robot import SO101Robot, MockSO101Robot
 from src.deploy.controllers import IKController
 
-# Add pick-101 paths for robobase and training modules
-pick101_root = Path("/home/gota/ggando/ml/pick-101")
-sys.path.insert(0, str(pick101_root))
-sys.path.insert(0, str(pick101_root / "external" / "robobase"))
+# Note: pick-101 paths are added after arg parsing to use --pick101_root
 
 
 def main():
@@ -126,12 +123,83 @@ def main():
         default=None,
         help="External camera index for third-person view recording",
     )
+    # Genesis-specific flags
+    parser.add_argument(
+        "--genesis_to_mujoco",
+        action="store_true",
+        help="Transform actions from Genesis frame to MuJoCo frame. "
+             "Genesis: X=sideways, -Y=forward, Z=up. "
+             "MuJoCo: X=forward, Y=sideways, Z=up. "
+             "Transformation: MuJoCo_X=-Genesis_Y, MuJoCo_Y=Genesis_X",
+    )
+    parser.add_argument(
+        "--genesis_mode",
+        action="store_true",
+        help="Enable all Genesis-specific fixes: joint offset, coordinate transform, "
+             "wrist locking, and grasp height reset. Equivalent to setting multiple flags.",
+    )
+    parser.add_argument(
+        "--pick101_root",
+        type=str,
+        default="/home/gota/ggando/ml/pick-101",
+        help="Path to pick-101 repository (for robobase dependencies)",
+    )
+    # Debug options
+    parser.add_argument(
+        "--debug_state",
+        action="store_true",
+        help="Print verbose state/action debug info at each step",
+    )
+    parser.add_argument(
+        "--save_obs",
+        action="store_true",
+        help="Save observation images to debug visual mismatch",
+    )
+    parser.add_argument(
+        "--save_obs_video",
+        type=str,
+        default=None,
+        help="Save observation images as video (path to output .mp4)",
+    )
+    parser.add_argument(
+        "--rotate_image",
+        type=int,
+        default=0,
+        choices=[0, 90, 180, 270],
+        help="Rotate camera image by degrees (for orientation mismatch)",
+    )
+    # Sim2real diagnostic options
+    parser.add_argument(
+        "--sim_frames_dir",
+        type=str,
+        default=None,
+        help="Directory with pre-recorded sim frames (PNG/NPY) for sim2real diagnostic",
+    )
+    parser.add_argument(
+        "--sim_states_file",
+        type=str,
+        default=None,
+        help="NPY file with sim low_dim_states for sim2real diagnostic",
+    )
 
     args = parser.parse_args()
 
+    # Add pick-101 paths for robobase and training modules
+    pick101_root = Path(args.pick101_root)
+    sys.path.insert(0, str(pick101_root))
+    sys.path.insert(0, str(pick101_root / "external" / "robobase"))
+
+    # Derive use_genesis flag for convenience
+    use_genesis = args.genesis_mode or args.genesis_to_mujoco
+
     print("=" * 60)
-    print("SO-101 RL Inference")
+    print("SO-101 RL Inference (DrQ-v2)")
     print("=" * 60)
+    if use_genesis:
+        print("[Genesis mode enabled]")
+        print("  - Coordinate transform: Genesis -> MuJoCo")
+        print("  - Joint offset correction: elbow_flex -12.5 deg")
+        print("  - Locked joints: [3, 4] (both wrist joints)")
 
     # === 1. Load Policy ===
     print("\n[1/4] Loading policy...")
@@ -212,6 +280,67 @@ def main():
                 print(f"  Failed to open external camera {args.external_camera}")
                 external_cap = None
 
+    # === Load sim frames if provided (for sim2real diagnostic) ===
+    sim_frames = None
+    sim_states = None
+    if args.sim_frames_dir:
+        sim_frames_dir = Path(args.sim_frames_dir)
+        if not sim_frames_dir.exists():
+            print(f"ERROR: Sim frames directory not found: {sim_frames_dir}")
+            if camera is not None:
+                camera.close()
+            robot.disconnect()
+            return
+
+        print(f"\n[SIM2REAL TEST] Loading frames from {sim_frames_dir}")
+
+        # Check for batch frames.npy first (preferred)
+        frames_npy = sim_frames_dir / "frames.npy"
+        if frames_npy.exists():
+            sim_frames = np.load(frames_npy)
+            print(f"  Loaded frames.npy: {sim_frames.shape}")
+        else:
+            # Fall back to individual PNGs
+            frame_files = sorted(sim_frames_dir.glob("*.png"))
+            if len(frame_files) == 0:
+                print(f"ERROR: No frames.npy or PNG files found in {sim_frames_dir}")
+                if camera is not None:
+                    camera.close()
+                robot.disconnect()
+                return
+
+            print(f"  Loading {len(frame_files)} PNG files...")
+            sim_frames = []
+            for f in frame_files:
+                img_bgr = cv2.imread(str(f))
+                img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+                if img_rgb.shape[:2] != (84, 84):
+                    img_rgb = cv2.resize(img_rgb, (84, 84), interpolation=cv2.INTER_AREA)
+                frame = np.transpose(img_rgb, (2, 0, 1)).astype(np.uint8)
+                sim_frames.append(frame)
+            sim_frames = np.array(sim_frames)
+            print(f"  Loaded frames shape: {sim_frames.shape}")
+
+    if args.sim_states_file:
+        sim_states_path = Path(args.sim_states_file)
+        if not sim_states_path.exists():
+            print(f"ERROR: Sim states file not found: {sim_states_path}")
+            if camera is not None:
+                camera.close()
+            robot.disconnect()
+            return
+        sim_states = np.load(sim_states_path)
+        print(f"  Loaded sim states shape: {sim_states.shape}")
+
+    use_sim_obs = sim_frames is not None
+
+    # Observation video writer (for debugging)
+    obs_video_writer = None
+    if args.save_obs_video:
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        obs_video_writer = cv2.VideoWriter(args.save_obs_video, fourcc, args.control_hz, (84, 84))
+        print(f"[Debug] Saving observation video to {args.save_obs_video}")
+
     def center_crop_square(image: np.ndarray) -> np.ndarray:
         """Center crop to square."""
         h, w = image.shape[:2]
@@ -234,17 +363,46 @@ def main():
     # Gripper positioned above cube, open, with wrist joints at π/2 (top-down)
     FINGER_WIDTH_OFFSET = -0.015  # Static finger is offset from gripper center
     GRASP_Z_OFFSET = 0.005
-    HEIGHT_OFFSET = 0.03  # Start 3cm above grasp height
     CUBE_Z = 0.015  # Cube height on table
+
+    # Genesis vs MuJoCo reset height difference
+    # MuJoCo: starts above cube (HEIGHT_OFFSET = 0.03)
+    # Genesis: starts at grasp height (HEIGHT_OFFSET = 0.0)
+    if use_genesis:
+        HEIGHT_OFFSET = 0.0   # Genesis: at grasp height
+        RESET_GRIPPER = 0.3   # Genesis uses partially open gripper
+    else:
+        HEIGHT_OFFSET = 0.03  # MuJoCo: 3cm above grasp height
+        RESET_GRIPPER = 1.0   # Fully open
 
     # Safe positions
     SAFE_JOINTS = np.zeros(5)  # Extended forward - safe for IK movements
     REST_JOINTS = np.array([-0.2424, -1.8040, 1.6582, 0.7309, -0.0629])  # Folded rest
 
+    # Joint offset correction (from kinematic verification devlog 032/036)
+    # elbow_flex (joint 2) reads ~12.5deg more bent than actual physical position
+    ELBOW_FLEX_OFFSET_RAD = np.deg2rad(-12.5)  # -12.5deg offset
+
+    def apply_joint_offset(joints: np.ndarray) -> np.ndarray:
+        """Apply calibration offset correction to joint readings for accurate FK.
+
+        The elbow_flex sensor has a ~12.5deg bias that causes FK position errors.
+        This correction aligns sensor readings with physical joint positions.
+        """
+        corrected = joints.copy()
+        corrected[2] += ELBOW_FLEX_OFFSET_RAD  # elbow_flex correction
+        return corrected
+
     def move_to_initial_pose_with_wrist_lock(robot, ik, target_pos, num_steps=100, dt=0.05):
         """Move robot to target EE position using IK with wrist locked at π/2."""
         for step in range(num_steps):
-            current_joints = robot.get_joint_positions_radians()
+            current_joints_raw = robot.get_joint_positions_radians()
+            # Apply joint offset for accurate FK if in genesis mode
+            if use_genesis:
+                current_joints = apply_joint_offset(current_joints_raw)
+            else:
+                current_joints = current_joints_raw.copy()
+
             # Lock wrist joints at π/2
             current_joints[3] = np.pi / 2
             current_joints[4] = -np.pi / 2
@@ -255,10 +413,19 @@ def main():
             # Ensure wrist stays locked
             target_joints[3] = np.pi / 2
             target_joints[4] = -np.pi / 2
-            robot.send_action(target_joints, 1.0)  # Open gripper
+
+            # Undo offset for robot command if in genesis mode
+            if use_genesis:
+                target_joints[2] -= ELBOW_FLEX_OFFSET_RAD
+
+            robot.send_action(target_joints, RESET_GRIPPER)
             time.sleep(dt)
 
-            ik.sync_joint_positions(robot.get_joint_positions_radians())
+            # Apply offset for FK accuracy check
+            if use_genesis:
+                ik.sync_joint_positions(apply_joint_offset(robot.get_joint_positions_radians()))
+            else:
+                ik.sync_joint_positions(robot.get_joint_positions_radians())
             ee_pos = ik.get_ee_position()
             error = np.linalg.norm(target_pos - ee_pos)
             if error < 0.01:  # Within 1cm
@@ -273,23 +440,38 @@ def main():
         # Step 1: Lift up to safe height (keep wrist orientation)
         print("  Lifting to safe height...")
         try:
-            current_joints = robot.get_joint_positions_radians()
-            ik.sync_joint_positions(current_joints)
+            current_joints_raw = robot.get_joint_positions_radians()
+            if use_genesis:
+                ik.sync_joint_positions(apply_joint_offset(current_joints_raw))
+            else:
+                ik.sync_joint_positions(current_joints_raw)
             current_ee = ik.get_ee_position()
             safe_height_target = current_ee.copy()
             safe_height_target[2] = 0.15  # Lift to 15cm
 
             for step in range(40):
-                current_joints = robot.get_joint_positions_radians()
+                current_joints_raw = robot.get_joint_positions_radians()
+                if use_genesis:
+                    current_joints = apply_joint_offset(current_joints_raw)
+                else:
+                    current_joints = current_joints_raw.copy()
                 current_joints[3] = np.pi / 2
                 current_joints[4] = -np.pi / 2
                 target_joints = ik.compute_ik(safe_height_target, current_joints, locked_joints=[3, 4])
                 target_joints[3] = np.pi / 2
                 target_joints[4] = -np.pi / 2
+
+                # Undo offset for robot command
+                if use_genesis:
+                    target_joints[2] -= ELBOW_FLEX_OFFSET_RAD
+
                 robot.send_action(target_joints, 1.0)
                 time.sleep(0.05)
 
-                ik.sync_joint_positions(robot.get_joint_positions_radians())
+                if use_genesis:
+                    ik.sync_joint_positions(apply_joint_offset(robot.get_joint_positions_radians()))
+                else:
+                    ik.sync_joint_positions(robot.get_joint_positions_radians())
                 ee_pos = ik.get_ee_position()
                 if ee_pos[2] > 0.12:  # High enough
                     break
@@ -333,7 +515,7 @@ def main():
 
             # Step 1: Reset to safe extended position
             print("  Step 1: Safe extended position...")
-            robot.send_action(SAFE_JOINTS, 1.0)  # Open gripper
+            robot.send_action(SAFE_JOINTS, RESET_GRIPPER)
             time.sleep(1.5)
 
             # Step 2: Set wrist joints to π/2 for top-down orientation
@@ -341,11 +523,12 @@ def main():
             topdown_joints = robot.get_joint_positions_radians().copy()
             topdown_joints[3] = np.pi / 2
             topdown_joints[4] = -np.pi / 2  # wrist_roll (flipped for real robot)
-            robot.send_action(topdown_joints, 1.0)
+            robot.send_action(topdown_joints, RESET_GRIPPER)
             time.sleep(1.0)
 
-            # Step 3: Move to training initial position (above cube) with wrist locked
-            print("  Step 3: Moving above cube position...")
+            # Step 3: Move to training initial position with wrist locked
+            reset_desc = "grasp height" if use_genesis else "above cube"
+            print(f"  Step 3: Moving to {reset_desc} position...")
             initial_target = np.array([
                 args.cube_x,
                 args.cube_y + FINGER_WIDTH_OFFSET,
@@ -370,7 +553,11 @@ def main():
             gripper_state = robot.get_gripper_position()
 
             # Use IK controller for FK (sync joints, read EE pose)
-            ik.sync_joint_positions(joint_pos_rad)
+            # Apply joint offset for accurate FK if in genesis mode
+            if use_genesis:
+                ik.sync_joint_positions(apply_joint_offset(joint_pos_rad))
+            else:
+                ik.sync_joint_positions(joint_pos_rad)
             ee_pos = ik.get_ee_position()
             ee_euler = ik.get_ee_euler()
 
@@ -389,11 +576,24 @@ def main():
                 state_buffer.append(state)
 
             # Episode loop
+            # Track global step for sim frame indexing
+            global_step = episode * args.episode_length
+
             for step in range(args.episode_length):
                 step_start = time.time()
 
                 # Get RGB observation
-                if use_mock_camera:
+                if use_sim_obs:
+                    # Use pre-recorded sim frames for sim2real diagnostic
+                    frame_idx = (global_step + step) % len(sim_frames)
+                    # For DrQ-v2, need to stack frames
+                    rgb_obs = np.stack([
+                        sim_frames[max(0, frame_idx - i)]
+                        for i in range(policy.frame_stack - 1, -1, -1)
+                    ], axis=0)
+                    if step == 0:
+                        print(f"  [SIM2REAL TEST] Using sim frame {frame_idx}/{len(sim_frames)}")
+                elif use_mock_camera:
                     rgb_obs = np.random.randint(
                         0, 256, (policy.frame_stack, 3, 84, 84), dtype=np.uint8
                     )
@@ -402,6 +602,33 @@ def main():
                     if rgb_obs is None:
                         print("  Camera frame error, ending episode")
                         break
+
+                    # Apply image rotation if specified
+                    if args.rotate_image != 0:
+                        rotated_stack = []
+                        for i in range(rgb_obs.shape[0]):
+                            img_hwc = np.transpose(rgb_obs[i], (1, 2, 0))
+                            if args.rotate_image == 90:
+                                img_hwc = cv2.rotate(img_hwc, cv2.ROTATE_90_CLOCKWISE)
+                            elif args.rotate_image == 180:
+                                img_hwc = cv2.rotate(img_hwc, cv2.ROTATE_180)
+                            elif args.rotate_image == 270:
+                                img_hwc = cv2.rotate(img_hwc, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                            rotated_stack.append(np.transpose(img_hwc, (2, 0, 1)))
+                        rgb_obs = np.stack(rotated_stack, axis=0)
+
+                    # Save observation for debugging
+                    if args.save_obs and step < 5:
+                        img_hwc = np.transpose(rgb_obs[-1], (1, 2, 0))
+                        img_bgr = cv2.cvtColor(img_hwc, cv2.COLOR_RGB2BGR)
+                        cv2.imwrite(f"drq_obs_ep{episode+1}_step{step}.png", img_bgr)
+                        print(f"    Saved observation: drq_obs_ep{episode+1}_step{step}.png")
+
+                    # Write to observation video
+                    if obs_video_writer is not None:
+                        img_hwc = np.transpose(rgb_obs[-1], (1, 2, 0))
+                        img_bgr = cv2.cvtColor(img_hwc, cv2.COLOR_RGB2BGR)
+                        obs_video_writer.write(img_bgr)
 
                     # Record wrist camera (get raw frame for higher quality)
                     if wrist_writer is not None:
@@ -421,23 +648,81 @@ def main():
                         external_writer.write(cropped)
 
                 # Stack low_dim states
-                low_dim_obs = np.stack(list(state_buffer), axis=0).astype(np.float32)
+                if sim_states is not None:
+                    # Use pre-recorded sim states for full sim observation playback
+                    state_idx = (global_step + step) % len(sim_states)
+                    # Need to stack states for DrQ-v2
+                    low_dim_obs = np.stack([
+                        sim_states[max(0, state_idx - i)]
+                        for i in range(policy.frame_stack - 1, -1, -1)
+                    ], axis=0).astype(np.float32)
+                    if step == 0:
+                        print(f"  [SIM2REAL TEST] Using sim state {state_idx}/{len(sim_states)}")
+                else:
+                    low_dim_obs = np.stack(list(state_buffer), axis=0).astype(np.float32)
+
+                # Debug state output
+                if args.debug_state and step == 0:
+                    print("\n  [DEBUG] Low-dim state breakdown (step 0):")
+                    latest_state = low_dim_obs[-1]
+                    print(f"    joint_pos (6): {latest_state[0:6]}")
+                    print(f"    joint_vel (6): {latest_state[6:12]}")
+                    print(f"    gripper_pos (3): {latest_state[12:15]}")
+                    print(f"    gripper_euler (3): {latest_state[15:18]}")
+                    if len(latest_state) > 18:
+                        print(f"    cube_pos (3): {latest_state[18:21]}")
 
                 # Get action from policy
                 action = policy.get_action(rgb_obs, low_dim_obs)
 
+                # Debug action output
+                if args.debug_state and step < 10:
+                    print(f"    [DEBUG] Step {step}: raw_action={action} (before any transforms)")
+
                 # Parse action
-                delta_xyz = action[:3]  # In [-1, 1], will be scaled
+                delta_xyz = action[:3].copy()  # In [-1, 1], will be scaled
                 gripper_action = action[3]  # -1 = closed, 1 = open
 
+                # Transform from Genesis frame to MuJoCo frame (90deg rotation)
+                if use_genesis:
+                    genesis_x, genesis_y, genesis_z = delta_xyz
+                    delta_xyz = np.array([
+                        -genesis_y,  # MuJoCo X (forward) = -Genesis Y
+                        genesis_x,   # MuJoCo Y (sideways) = Genesis X
+                        genesis_z,   # Z unchanged
+                    ])
+                    if args.debug_state and step < 10:
+                        print(f"    [DEBUG] Transformed: genesis({genesis_x:.3f},{genesis_y:.3f},{genesis_z:.3f}) -> mujoco({delta_xyz[0]:.3f},{delta_xyz[1]:.3f},{delta_xyz[2]:.3f})")
+
                 # Use IK to convert Cartesian action to joint targets
-                current_joints = robot.get_joint_positions_radians()
+                current_joints_raw = robot.get_joint_positions_radians()
+
+                # Apply joint offset for accurate IK (Genesis mode)
+                if use_genesis:
+                    current_joints = apply_joint_offset(current_joints_raw)
+                else:
+                    current_joints = current_joints_raw.copy()
+
                 target_joints = ik.cartesian_to_joints(
                     delta_xyz,
                     current_joints,
                     action_scale=args.action_scale,
-                    locked_joints=[4],  # Lock wrist_roll for stability
+                    locked_joints=[3, 4] if use_genesis else [4],  # Lock both wrist joints for Genesis
                 )
+
+                # Convert back from corrected joints to raw joints for robot command
+                if use_genesis:
+                    target_joints[2] -= ELBOW_FLEX_OFFSET_RAD
+
+                # Debug IK
+                if args.debug_state and step < 5:
+                    ik.sync_joint_positions(current_joints)
+                    current_ee = ik.get_ee_position()
+                    target_ee = current_ee + delta_xyz * args.action_scale
+                    joint_diff = target_joints - current_joints_raw
+                    print(f"    [IK DEBUG] current_ee=[{current_ee[0]:.4f},{current_ee[1]:.4f},{current_ee[2]:.4f}]")
+                    print(f"    [IK DEBUG] target_ee=[{target_ee[0]:.4f},{target_ee[1]:.4f},{target_ee[2]:.4f}]")
+                    print(f"    [IK DEBUG] joint_diff={joint_diff}")
 
                 # Send action to robot
                 if not args.dry_run:
@@ -448,8 +733,11 @@ def main():
                 joint_vel = robot.get_joint_velocities()
                 gripper_state = robot.get_gripper_position()
 
-                # FK for EE state
-                ik.sync_joint_positions(joint_pos_rad)
+                # FK for EE state (apply offset for Genesis)
+                if use_genesis:
+                    ik.sync_joint_positions(apply_joint_offset(joint_pos_rad))
+                else:
+                    ik.sync_joint_positions(joint_pos_rad)
                 ee_pos = ik.get_ee_position()
                 ee_euler = ik.get_ee_euler()
 
@@ -462,12 +750,18 @@ def main():
                 )
                 state_buffer.append(state)
 
-                # Status
+                # Status - show full EE position for Genesis mode
                 if step % 20 == 0:
-                    print(
-                        f"  Step {step}: delta={delta_xyz} "
-                        f"gripper={gripper_action:.2f} ee_z={ee_pos[2]:.3f}"
-                    )
+                    if use_genesis:
+                        print(
+                            f"  Step {step}: delta=[{delta_xyz[0]:.2f},{delta_xyz[1]:.2f},{delta_xyz[2]:.2f}] "
+                            f"gripper={gripper_action:.2f} ee=[{ee_pos[0]:.3f},{ee_pos[1]:.3f},{ee_pos[2]:.3f}]"
+                        )
+                    else:
+                        print(
+                            f"  Step {step}: delta={delta_xyz} "
+                            f"gripper={gripper_action:.2f} ee_z={ee_pos[2]:.3f}"
+                        )
 
                 # Control rate
                 elapsed = time.time() - step_start
@@ -493,6 +787,9 @@ def main():
 
     finally:
         print("\nCleaning up...")
+        if obs_video_writer is not None:
+            obs_video_writer.release()
+            print(f"  Saved observation video: {args.save_obs_video}")
         if camera is not None:
             camera.close()
         if external_cap is not None:
