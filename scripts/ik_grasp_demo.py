@@ -38,14 +38,14 @@ from src.deploy.controllers import IKController
 
 
 # Constants from pick-101's test_topdown_pick.py (adjusted for real robot)
-HEIGHT_OFFSET = 0.03      # 30mm above grasp position (for "above" position)
+HEIGHT_OFFSET = 0.06      # 60mm above grasp position (for "above" position)
 GRASP_Z_OFFSET = 0.005    # 5mm above cube center for grasp (sim reference)
-GRASP_HEIGHT_SAFETY = 0.015  # Extra 15mm clearance for real robot (grasp at 35mm instead of 20mm)
+GRASP_HEIGHT_SAFETY = 0.05  # Extra 50mm clearance for real robot (grasp at 70mm instead of 20mm)
 CUBE_Z = 0.015            # Cube center height (30mm cube on table)
 FINGER_WIDTH_OFFSET = -0.015  # Y offset to center grip on cube
 
 GRIPPER_OPEN = 0.3        # Partially open (like pick-101)
-GRIPPER_CLOSED = -0.8     # Tight grip
+GRIPPER_CLOSED = -1.0     # Closed
 
 # Joint offset correction (from kinematic verification)
 ELBOW_FLEX_OFFSET_RAD = np.deg2rad(-12.5)
@@ -64,9 +64,9 @@ def move_to_position(robot, ik, target_pos, gripper_action, num_steps=100, dt=0.
         current_joints_raw = robot.get_joint_positions_radians()
         current_joints = apply_joint_offset(current_joints_raw)
 
-        # Lock wrist joints at π/2 for top-down
+        # Lock wrist joints at π/2 for top-down (matches MuJoCo convention)
         current_joints[3] = np.pi / 2
-        current_joints[4] = -np.pi / 2
+        current_joints[4] = np.pi / 2
 
         # Multiple IK iterations for convergence
         for _ in range(3):
@@ -75,7 +75,7 @@ def move_to_position(robot, ik, target_pos, gripper_action, num_steps=100, dt=0.
 
         # Ensure wrist stays locked
         target_joints[3] = np.pi / 2
-        target_joints[4] = -np.pi / 2
+        target_joints[4] = np.pi / 2
 
         # Undo offset for robot command
         target_joints[2] -= ELBOW_FLEX_OFFSET_RAD
@@ -212,11 +212,11 @@ def main():
         robot.send_action(SAFE_JOINTS, gripper_open)
         record_steps(30)  # Record 1.5s at safe position
 
-        # Set wrist joints to top-down
+        # Set wrist joints to top-down (matches MuJoCo convention)
         print("  Setting top-down wrist orientation...")
         topdown_joints = robot.get_joint_positions_radians().copy()
         topdown_joints[3] = np.pi / 2
-        topdown_joints[4] = -np.pi / 2
+        topdown_joints[4] = np.pi / 2
         robot.send_action(topdown_joints, gripper_open)
         record_steps(20)
 
@@ -242,12 +242,13 @@ def main():
         print(f"  Reached: {ee_pos}")
         record_steps(20)
 
-        # Step 3: Close gripper
+        # Save grasp position joints
+        grasp_joints = robot.get_joint_positions_radians()
+
+        # Step 3: Close gripper - keep arm at grasp position
         print(f"\n[Step 3] Closing gripper...")
-        # Gradual close
         for grip in np.linspace(gripper_open, GRIPPER_CLOSED, 20):
-            current_joints = robot.get_joint_positions_radians()
-            robot.send_action(current_joints, grip)
+            robot.send_action(grasp_joints, grip)
             record_frame()
             time.sleep(0.05)
         record_steps(20)
@@ -264,11 +265,13 @@ def main():
         print(f"  Reached: {ee_pos}")
         record_steps(40)  # Hold and record
 
-        # Step 5: Open gripper (release)
+        # Save lift position joints for release step
+        lift_joints = robot.get_joint_positions_radians()
+
+        # Step 5: Open gripper (release) - keep arm at lift position
         print(f"\n[Step 5] Releasing...")
         for grip in np.linspace(GRIPPER_CLOSED, gripper_open, 20):
-            current_joints = robot.get_joint_positions_radians()
-            robot.send_action(current_joints, grip)
+            robot.send_action(lift_joints, grip)
             record_frame()
             time.sleep(0.05)
         record_steps(20)
