@@ -58,7 +58,7 @@ def apply_joint_offset(joints: np.ndarray) -> np.ndarray:
     return corrected
 
 
-def move_to_position(robot, ik, target_pos, gripper_action, num_steps=100, dt=0.05):
+def move_to_position(robot, ik, target_pos, gripper_action, num_steps=100, dt=0.05, record_callback=None):
     """Move robot to target EE position using IK with wrist locked."""
     for step in range(num_steps):
         current_joints_raw = robot.get_joint_positions_radians()
@@ -81,6 +81,11 @@ def move_to_position(robot, ik, target_pos, gripper_action, num_steps=100, dt=0.
         target_joints[2] -= ELBOW_FLEX_OFFSET_RAD
 
         robot.send_action(target_joints, gripper_action)
+
+        # Record frame during motion
+        if record_callback:
+            record_callback()
+
         time.sleep(dt)
 
         # Check convergence
@@ -111,15 +116,17 @@ def main():
     parser.add_argument("--output", type=str, default=None, help="Output video path (default: auto-generated)")
     parser.add_argument("--dry_run", action="store_true", help="Run without real robot/camera")
     parser.add_argument("--fps", type=float, default=20.0, help="Recording FPS")
-    parser.add_argument("--half_open", action="store_true", help="Use half-open gripper (0.3) instead of fully open (1.0)")
+    parser.add_argument("--gripper_open", type=float, default=1.0, help="Gripper open position (-1.0=closed, 1.0=fully open, default=1.0)")
+    parser.add_argument("--half_open", action="store_true", help="Use half-open gripper (0.0 = 50%% physical)")
     args = parser.parse_args()
 
-    # Set gripper open position based on flag
-    gripper_open = GRIPPER_OPEN if args.half_open else 1.0  # half-open (0.3) or fully open (1.0)
+    # Set gripper open position from argument (--half_open overrides --gripper_open)
+    gripper_open = 0.0 if args.half_open else args.gripper_open
 
     print("=" * 60)
     print("IK Grasp Demo with Wrist Cam Recording")
     print("=" * 60)
+    print(f"Gripper open position: {gripper_open}")
 
     # Initialize robot
     print("\n[1/3] Initializing robot...")
@@ -220,7 +227,7 @@ def main():
         print(f"\n[Step 1] Moving above block...")
         print(f"  Target: {above_pos}")
 
-        ee_pos = move_to_position(robot, ik, above_pos, gripper_open, num_steps=100)
+        ee_pos = move_to_position(robot, ik, above_pos, gripper_open, num_steps=100, record_callback=record_frame)
         print(f"  Reached: {ee_pos}")
         record_steps(20)
 
@@ -231,7 +238,7 @@ def main():
         print(f"\n[Step 2] Moving down to block...")
         print(f"  Target: {grasp_pos}")
 
-        ee_pos = move_to_position(robot, ik, grasp_pos, gripper_open, num_steps=80)
+        ee_pos = move_to_position(robot, ik, grasp_pos, gripper_open, num_steps=80, record_callback=record_frame)
         print(f"  Reached: {ee_pos}")
         record_steps(20)
 
@@ -253,7 +260,7 @@ def main():
         print(f"\n[Step 4] Lifting...")
         print(f"  Target: {lift_pos}")
 
-        ee_pos = move_to_position(robot, ik, lift_pos, GRIPPER_CLOSED, num_steps=80)
+        ee_pos = move_to_position(robot, ik, lift_pos, GRIPPER_CLOSED, num_steps=80, record_callback=record_frame)
         print(f"  Reached: {ee_pos}")
         record_steps(40)  # Hold and record
 
@@ -283,7 +290,7 @@ def main():
             current_ee = ik.get_ee_position()
             safe_height = current_ee.copy()
             safe_height[2] = 0.15
-            move_to_position(robot, ik, safe_height, gripper_open, num_steps=40)
+            move_to_position(robot, ik, safe_height, gripper_open, num_steps=40, record_callback=record_frame)
         except Exception:
             pass
 
