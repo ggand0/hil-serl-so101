@@ -208,6 +208,7 @@ def main():
         print("Failed to load policy. Exiting.")
         return
     print(f"  Frame stack: {policy.frame_stack}")
+    print(f"  State dim: {policy.state_dim}")
 
     # === 2. Initialize Camera ===
     print("\n[2/4] Initializing camera...")
@@ -367,9 +368,10 @@ def main():
 
     # Genesis vs MuJoCo reset height difference
     # MuJoCo: starts above cube (HEIGHT_OFFSET = 0.03)
-    # Genesis: starts at grasp height (HEIGHT_OFFSET = 0.0)
+    # Genesis: starts slightly above cube (HEIGHT_OFFSET = 0.02) for real robot safety
+    # Note: Genesis sim trains at grasp height (0.0), but real robot needs clearance
     if use_genesis:
-        HEIGHT_OFFSET = 0.0   # Genesis: at grasp height
+        HEIGHT_OFFSET = 0.02  # Genesis: 20mm above grasp height (40mm total) for real robot safety
         RESET_GRIPPER = 0.3   # Genesis uses partially open gripper
     else:
         HEIGHT_OFFSET = 0.03  # MuJoCo: 3cm above grasp height
@@ -527,17 +529,37 @@ def main():
             time.sleep(1.0)
 
             # Step 3: Move to training initial position with wrist locked
-            reset_desc = "grasp height" if use_genesis else "above cube"
-            print(f"  Step 3: Moving to {reset_desc} position...")
-            initial_target = np.array([
+            # Use 2-step approach like pick-101: first go above, then lower down
+            # This prevents hitting the table during the IK motion
+            SAFE_HEIGHT_OFFSET = 0.03  # 30mm above grasp position (same as pick-101)
+
+            # Step 3a: Move to safe height above target first
+            print("  Step 3a: Moving to safe height above target...")
+            safe_target = np.array([
                 args.cube_x,
                 args.cube_y + FINGER_WIDTH_OFFSET,
-                CUBE_Z + GRASP_Z_OFFSET + HEIGHT_OFFSET
+                CUBE_Z + GRASP_Z_OFFSET + SAFE_HEIGHT_OFFSET  # Always 50mm above ground
             ])
-            print(f"    Target: {initial_target}")
+            print(f"    Safe target: {safe_target}")
 
-            ee_pos = move_to_initial_pose_with_wrist_lock(robot, ik, initial_target)
+            ee_pos = move_to_initial_pose_with_wrist_lock(robot, ik, safe_target)
             print(f"    Reached: {ee_pos}")
+
+            # Step 3b: Lower to final position (only needed for Genesis mode)
+            if use_genesis:
+                print("  Step 3b: Lowering to grasp height...")
+                final_target = np.array([
+                    args.cube_x,
+                    args.cube_y + FINGER_WIDTH_OFFSET,
+                    CUBE_Z + GRASP_Z_OFFSET + HEIGHT_OFFSET  # 20mm for Genesis
+                ])
+                print(f"    Final target: {final_target}")
+
+                ee_pos = move_to_initial_pose_with_wrist_lock(robot, ik, final_target)
+                print(f"    Reached: {ee_pos}")
+            else:
+                reset_desc = "above cube"
+                print(f"  (MuJoCo mode: already at {reset_desc} position)")
 
             # Reset buffers
             state_buffer.clear()
@@ -671,6 +693,11 @@ def main():
                     print(f"    gripper_euler (3): {latest_state[15:18]}")
                     if len(latest_state) > 18:
                         print(f"    cube_pos (3): {latest_state[18:21]}")
+
+                # Slice low_dim_obs to match policy's expected state_dim
+                # LowDimStateBuilder produces 21-dim, but some checkpoints expect 18-dim (no cube_pos)
+                if low_dim_obs.shape[-1] != policy.state_dim:
+                    low_dim_obs = low_dim_obs[..., :policy.state_dim]
 
                 # Get action from policy
                 action = policy.get_action(rgb_obs, low_dim_obs)
