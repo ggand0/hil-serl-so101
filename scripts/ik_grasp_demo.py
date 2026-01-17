@@ -181,8 +181,8 @@ def main():
         print(f"  Recording to: {output_path}")
 
     # Safe positions
-    SAFE_JOINTS = np.zeros(5)
-    REST_JOINTS = np.array([-0.2424, -1.8040, 1.6582, 0.7309, -0.0629])
+    RESET_JOINTS = np.zeros(5)  # All motors in middle of range (arm extended forward)
+    REST_JOINTS = np.array([-0.1756, -1.8619, 1.7922, 0.7840, -0.2187])  # Folded rest
 
     def record_frame():
         """Capture and record a frame."""
@@ -207,9 +207,16 @@ def main():
     print(f"Cube position: {cube_pos}")
 
     try:
-        # Step 0: Go to safe extended position
-        print("\n[Step 0] Moving to safe extended position...")
-        robot.send_action(SAFE_JOINTS, gripper_open)
+        # Step 0: Go to reset position (all motors in middle of range)
+        print("\n[Step 0] Moving to reset position...")
+        print(f"  Target (rad): {RESET_JOINTS}")
+        print(f"  Target (deg): {np.rad2deg(RESET_JOINTS)}")
+        current_before = robot.get_joint_positions_radians()
+        print(f"  Current (deg): {np.rad2deg(current_before)}")
+        robot.send_action(RESET_JOINTS, gripper_open)
+        time.sleep(3.0)  # Wait for motors to reach position
+        current_after = robot.get_joint_positions_radians()
+        print(f"  After (deg): {np.rad2deg(current_after)}")
         record_steps(30)  # Record 1.5s at safe position
 
         # Set wrist joints to top-down (matches MuJoCo convention)
@@ -284,20 +291,19 @@ def main():
         print("\nInterrupted by user")
 
     finally:
-        # Safe return
-        print("\nReturning to rest position...")
+        # Safe return sequence
+        print("\nSafe return sequence...")
 
-        # Lift up first
-        try:
-            ik.sync_joint_positions(apply_joint_offset(robot.get_joint_positions_radians()))
-            current_ee = ik.get_ee_position()
-            safe_height = current_ee.copy()
-            safe_height[2] = 0.15
-            move_to_position(robot, ik, safe_height, gripper_open, num_steps=40, record_callback=record_frame)
-        except Exception:
-            pass
+        # Step 1: Go to reset position first (all motors in middle of range)
+        print("  Moving to reset position...")
+        robot.send_action(RESET_JOINTS, gripper_open)
+        time.sleep(2.0)
+        record_steps(20)
 
+        # Step 2: Go to rest position
+        print("  Moving to rest position...")
         robot.send_action(REST_JOINTS, -1.0)
+        time.sleep(2.0)
         record_steps(20)
 
         # Cleanup

@@ -371,7 +371,7 @@ def main():
     # Genesis: starts slightly above cube (HEIGHT_OFFSET = 0.02) for real robot safety
     # Note: Genesis sim trains at grasp height (0.0), but real robot needs clearance
     if use_genesis:
-        HEIGHT_OFFSET = 0.02  # Genesis: 20mm above grasp height (40mm total) for real robot safety
+        HEIGHT_OFFSET = 0.05  # Genesis: 50mm above grasp height (70mm total, matches grasp demo)
         RESET_GRIPPER = 0.3   # Genesis uses partially open gripper
     else:
         HEIGHT_OFFSET = 0.03  # MuJoCo: 3cm above grasp height
@@ -379,7 +379,7 @@ def main():
 
     # Safe positions
     SAFE_JOINTS = np.zeros(5)  # Extended forward - safe for IK movements
-    REST_JOINTS = np.array([-0.2424, -1.8040, 1.6582, 0.7309, -0.0629])  # Folded rest
+    REST_JOINTS = np.array([-0.1756, -1.8619, 1.7922, 0.7840, -0.2187])  # Folded rest
 
     # Joint offset correction (from kinematic verification devlog 032/036)
     # elbow_flex (joint 2) reads ~12.5deg more bent than actual physical position
@@ -405,16 +405,16 @@ def main():
             else:
                 current_joints = current_joints_raw.copy()
 
-            # Lock wrist joints at π/2
+            # Lock wrist joints at π/2 for top-down orientation
             current_joints[3] = np.pi / 2
-            current_joints[4] = -np.pi / 2
+            current_joints[4] = np.pi / 2
             # Multiple IK iterations for better convergence
             for _ in range(3):
                 target_joints = ik.compute_ik(target_pos, current_joints, locked_joints=[3, 4])
                 current_joints = target_joints
             # Ensure wrist stays locked
             target_joints[3] = np.pi / 2
-            target_joints[4] = -np.pi / 2
+            target_joints[4] = np.pi / 2
 
             # Undo offset for robot command if in genesis mode
             if use_genesis:
@@ -458,10 +458,10 @@ def main():
                 else:
                     current_joints = current_joints_raw.copy()
                 current_joints[3] = np.pi / 2
-                current_joints[4] = -np.pi / 2
+                current_joints[4] = np.pi / 2
                 target_joints = ik.compute_ik(safe_height_target, current_joints, locked_joints=[3, 4])
                 target_joints[3] = np.pi / 2
-                target_joints[4] = -np.pi / 2
+                target_joints[4] = np.pi / 2
 
                 # Undo offset for robot command
                 if use_genesis:
@@ -524,14 +524,14 @@ def main():
             print("  Step 2: Setting top-down wrist orientation...")
             topdown_joints = robot.get_joint_positions_radians().copy()
             topdown_joints[3] = np.pi / 2
-            topdown_joints[4] = -np.pi / 2  # wrist_roll (flipped for real robot)
+            topdown_joints[4] = np.pi / 2  # wrist_roll (matches MuJoCo convention)
             robot.send_action(topdown_joints, RESET_GRIPPER)
             time.sleep(1.0)
 
             # Step 3: Move to training initial position with wrist locked
             # Use 2-step approach like pick-101: first go above, then lower down
             # This prevents hitting the table during the IK motion
-            SAFE_HEIGHT_OFFSET = 0.03  # 30mm above grasp position (same as pick-101)
+            SAFE_HEIGHT_OFFSET = 0.06  # 100mm above grasp position
 
             # Step 3a: Move to safe height above target first
             print("  Step 3a: Moving to safe height above target...")
@@ -545,7 +545,7 @@ def main():
             ee_pos = move_to_initial_pose_with_wrist_lock(robot, ik, safe_target)
             print(f"    Reached: {ee_pos}")
 
-            # Step 3b: Lower to final position (only needed for Genesis mode)
+            # Step 3b: Lower to final position (commented out - using safe height as final)
             if use_genesis:
                 print("  Step 3b: Lowering to grasp height...")
                 final_target = np.array([
@@ -554,7 +554,7 @@ def main():
                     CUBE_Z + GRASP_Z_OFFSET + HEIGHT_OFFSET  # 20mm for Genesis
                 ])
                 print(f"    Final target: {final_target}")
-
+        
                 ee_pos = move_to_initial_pose_with_wrist_lock(robot, ik, final_target)
                 print(f"    Reached: {ee_pos}")
             else:
