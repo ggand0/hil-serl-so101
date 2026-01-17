@@ -74,12 +74,25 @@ class PolicyRunner:
             import hydra
 
             # Get observation and action space info from config
-            # These are hardcoded based on the training setup
-            # TODO: Save these in the checkpoint for portability
             frame_stack = self._cfg.frame_stack  # 3
             image_size = self._cfg.env.image_size  # 84
-            state_dim = 21  # joint_pos(6) + joint_vel(6) + gripper_pos(3) + gripper_euler(3) + cube_pos(3)
             action_dim = 4  # delta XYZ + gripper
+
+            # Auto-detect state_dim from checkpoint weights
+            # low_dim_obs weight shape is (hidden, frame_stack * state_dim)
+            agent_state = payload["agent"]
+            low_dim_weight_key = "actor_model.input_preprocess_modules.low_dim_obs.0.weight"
+            if low_dim_weight_key in agent_state:
+                total_low_dim = agent_state[low_dim_weight_key].shape[1]
+                state_dim = total_low_dim // frame_stack
+                print(f"  Auto-detected state_dim={state_dim} from checkpoint (total={total_low_dim}, frame_stack={frame_stack})")
+            else:
+                # Fallback to default
+                state_dim = 21  # joint_pos(6) + joint_vel(6) + gripper_pos(3) + gripper_euler(3) + cube_pos(3)
+                print(f"  Using default state_dim={state_dim}")
+
+            # Store for property access
+            self._state_dim = state_dim
 
             observation_space = {
                 "rgb": {"shape": (frame_stack, 3, image_size, image_size)},
@@ -172,8 +185,8 @@ class PolicyRunner:
 
     @property
     def state_dim(self) -> int:
-        """State dimension (21 in sim, may differ for real)."""
-        return 21
+        """State dimension (auto-detected from checkpoint)."""
+        return getattr(self, "_state_dim", 21)
 
     @property
     def frame_stack(self) -> int:
