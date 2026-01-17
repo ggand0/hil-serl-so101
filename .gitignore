@@ -1,3 +1,6 @@
+tmp*
+*.png
+*.mp4
 calibration*/
 devlogs/
 recordings/
