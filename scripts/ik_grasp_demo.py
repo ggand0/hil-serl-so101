@@ -182,7 +182,7 @@ def main():
 
     # Safe positions
     RESET_JOINTS = np.zeros(5)  # All motors in middle of range (arm extended forward)
-    REST_JOINTS = np.array([-0.1756, -1.8619, 1.7922, 0.7840, -0.2187])  # Folded rest
+    REST_JOINTS = np.array([-0.0591, -1.8415, 1.7135, 0.7210, -0.1097])  # Folded rest
 
     def record_frame():
         """Capture and record a frame."""
@@ -294,17 +294,54 @@ def main():
         # Safe return sequence
         print("\nSafe return sequence...")
 
-        # Step 1: Go to reset position first (all motors in middle of range)
-        print("  Moving to reset position...")
-        robot.send_action(RESET_JOINTS, gripper_open)
-        time.sleep(2.0)
-        record_steps(20)
+        # Wait for serial port to recover from interrupted communication
+        time.sleep(0.5)
 
-        # Step 2: Go to rest position
-        print("  Moving to rest position...")
+        try:
+            # Step 1: Lift up to safe height (keep wrist orientation)
+            print("  Lifting to safe height...")
+            current_joints_raw = robot.get_joint_positions_radians()
+            ik.sync_joint_positions(apply_joint_offset(current_joints_raw))
+            current_ee = ik.get_ee_position()
+            safe_height_target = current_ee.copy()
+            safe_height_target[2] = 0.15  # Lift to 15cm
+
+            for step in range(40):
+                current_joints_raw = robot.get_joint_positions_radians()
+                current_joints = apply_joint_offset(current_joints_raw)
+                current_joints[3] = np.pi / 2
+                current_joints[4] = np.pi / 2
+                target_joints = ik.compute_ik(safe_height_target, current_joints, locked_joints=[3, 4])
+                target_joints[3] = np.pi / 2
+                target_joints[4] = np.pi / 2
+                target_joints[2] -= ELBOW_FLEX_OFFSET_RAD
+
+                robot.send_action(target_joints, 1.0)
+                record_frame()
+                time.sleep(0.05)
+
+                ik.sync_joint_positions(apply_joint_offset(robot.get_joint_positions_radians()))
+                ee_pos = ik.get_ee_position()
+                if ee_pos[2] > 0.12:  # High enough
+                    break
+
+            print(f"  Lifted to: {ik.get_ee_position()}")
+            time.sleep(0.3)
+        except Exception as e:
+            print(f"  Warning: Failed to lift ({e}), going directly to rest...")
+
+        # Step 2: Interpolate to rest position (gradual wrist movement)
+        print("  Returning to rest position...")
+        current_joints = robot.get_joint_positions_radians()
+        for i in range(20):
+            alpha = (i + 1) / 20
+            interp_joints = (1 - alpha) * current_joints + alpha * REST_JOINTS
+            robot.send_action(interp_joints, -1.0)
+            record_frame()
+            time.sleep(0.1)
         robot.send_action(REST_JOINTS, -1.0)
-        time.sleep(2.0)
-        record_steps(20)
+        time.sleep(1.0)
+        record_steps(10)
 
         # Cleanup
         if video_writer is not None:

@@ -379,7 +379,7 @@ def main():
 
     # Safe positions
     SAFE_JOINTS = np.zeros(5)  # Extended forward - safe for IK movements
-    REST_JOINTS = np.array([-0.1756, -1.8619, 1.7922, 0.7840, -0.2187])  # Folded rest
+    REST_JOINTS = np.array([-0.0591, -1.8415, 1.7135, 0.7210, -0.1097])  # Folded rest
 
     # Joint offset correction (from kinematic verification devlog 032/036)
     # elbow_flex (joint 2) reads ~12.5deg more bent than actual physical position
@@ -396,41 +396,38 @@ def main():
         return corrected
 
     def move_to_initial_pose_with_wrist_lock(robot, ik, target_pos, num_steps=100, dt=0.05):
-        """Move robot to target EE position using IK with wrist locked at π/2."""
+        """Move robot to target EE position using IK with wrist locked at π/2.
+
+        Matches ik_grasp_demo.py move_to_position() exactly.
+        """
         for step in range(num_steps):
             current_joints_raw = robot.get_joint_positions_radians()
-            # Apply joint offset for accurate FK if in genesis mode
-            if use_genesis:
-                current_joints = apply_joint_offset(current_joints_raw)
-            else:
-                current_joints = current_joints_raw.copy()
+            current_joints = apply_joint_offset(current_joints_raw)
 
-            # Lock wrist joints at π/2 for top-down orientation
+            # Lock wrist joints at π/2 for top-down (matches MuJoCo convention)
             current_joints[3] = np.pi / 2
             current_joints[4] = np.pi / 2
-            # Multiple IK iterations for better convergence
+
+            # Multiple IK iterations for convergence
             for _ in range(3):
                 target_joints = ik.compute_ik(target_pos, current_joints, locked_joints=[3, 4])
                 current_joints = target_joints
+
             # Ensure wrist stays locked
             target_joints[3] = np.pi / 2
             target_joints[4] = np.pi / 2
 
-            # Undo offset for robot command if in genesis mode
-            if use_genesis:
-                target_joints[2] -= ELBOW_FLEX_OFFSET_RAD
+            # Undo offset for robot command
+            target_joints[2] -= ELBOW_FLEX_OFFSET_RAD
 
             robot.send_action(target_joints, RESET_GRIPPER)
             time.sleep(dt)
 
-            # Apply offset for FK accuracy check
-            if use_genesis:
-                ik.sync_joint_positions(apply_joint_offset(robot.get_joint_positions_radians()))
-            else:
-                ik.sync_joint_positions(robot.get_joint_positions_radians())
+            # Check convergence
+            ik.sync_joint_positions(apply_joint_offset(robot.get_joint_positions_radians()))
             ee_pos = ik.get_ee_position()
             error = np.linalg.norm(target_pos - ee_pos)
-            if error < 0.01:  # Within 1cm
+            if error < 0.005:  # Within 5mm
                 break
 
         return ee_pos
@@ -483,9 +480,15 @@ def main():
         except Exception as e:
             print(f"  Warning: Failed to lift ({e}), going directly to rest...")
 
-        # Step 2: Return to rest position with gripper closed
+        # Step 2: Interpolate to rest position (gradual wrist movement)
         print("  Returning to rest position...")
-        robot.send_action(REST_JOINTS, -1.0)  # Close gripper at rest
+        current_joints = robot.get_joint_positions_radians()
+        for i in range(20):
+            alpha = (i + 1) / 20
+            interp_joints = (1 - alpha) * current_joints + alpha * REST_JOINTS
+            robot.send_action(interp_joints, -1.0)
+            time.sleep(0.1)
+        robot.send_action(REST_JOINTS, -1.0)
         time.sleep(1.0)
 
     try:
@@ -515,10 +518,10 @@ def main():
                     external_writer = cv2.VideoWriter(str(external_path), fourcc, args.control_hz, (ext_size, ext_size))
                     print(f"  Recording external: {external_path}")
 
-            # Step 1: Reset to safe extended position
-            print("  Step 1: Safe extended position...")
+            # Step 1: Reset to safe extended position (like grasp demo)
+            print("  Step 1: Reset position (extended forward)...")
             robot.send_action(SAFE_JOINTS, RESET_GRIPPER)
-            time.sleep(1.5)
+            time.sleep(3.0)
 
             # Step 2: Set wrist joints to π/2 for top-down orientation
             print("  Step 2: Setting top-down wrist orientation...")
@@ -531,7 +534,7 @@ def main():
             # Step 3: Move to training initial position with wrist locked
             # Use 2-step approach like pick-101: first go above, then lower down
             # This prevents hitting the table during the IK motion
-            SAFE_HEIGHT_OFFSET = 0.06  # 100mm above grasp position
+            SAFE_HEIGHT_OFFSET = 0.06  # 60mm above grasp position (matches grasp demo HEIGHT_OFFSET)
 
             # Step 3a: Move to safe height above target first
             print("  Step 3a: Moving to safe height above target...")
@@ -545,21 +548,17 @@ def main():
             ee_pos = move_to_initial_pose_with_wrist_lock(robot, ik, safe_target)
             print(f"    Reached: {ee_pos}")
 
-            # Step 3b: Lower to final position (commented out - using safe height as final)
+            # Step 3b: Lower to final position
             if use_genesis:
                 print("  Step 3b: Lowering to grasp height...")
                 final_target = np.array([
                     args.cube_x,
                     args.cube_y + FINGER_WIDTH_OFFSET,
-                    CUBE_Z + GRASP_Z_OFFSET + HEIGHT_OFFSET  # 20mm for Genesis
+                    CUBE_Z + GRASP_Z_OFFSET + HEIGHT_OFFSET
                 ])
                 print(f"    Final target: {final_target}")
-        
                 ee_pos = move_to_initial_pose_with_wrist_lock(robot, ik, final_target)
                 print(f"    Reached: {ee_pos}")
-            else:
-                reset_desc = "above cube"
-                print(f"  (MuJoCo mode: already at {reset_desc} position)")
 
             # Reset buffers
             state_buffer.clear()
@@ -821,7 +820,15 @@ def main():
             camera.close()
         if external_cap is not None:
             external_cap.release()
-        safe_return()
+
+        # Wait for serial port to recover from interrupted communication
+        time.sleep(0.5)
+
+        try:
+            safe_return()
+        except Exception as e:
+            print(f"  Warning: safe_return failed ({e})")
+
         robot.disconnect()
         print("Done.")
 
