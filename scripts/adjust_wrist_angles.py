@@ -1,74 +1,82 @@
 #!/usr/bin/env python3
 """Interactive script to find correct wrist joint angles after recalibration.
 
+Uses IK reset motion to safely lift arm before adjusting wrist angles.
+
 Usage:
     uv run python scripts/adjust_wrist_angles.py
-    uv run python scripts/adjust_wrist_angles.py --port /dev/ttyACM0
 """
 
 import argparse
 import time
+from pathlib import Path
 
-from lerobot.motors import Motor, MotorNormMode
-from lerobot.motors.feetech import FeetechMotorsBus
+import numpy as np
 
+import sys
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
-MOTOR_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
-
-# STS3215 resolution: 4096 steps per 360 degrees
-STEPS_PER_DEG = 4096 / 360.0
-
-
-def steps_to_deg(steps: int) -> float:
-    return steps / STEPS_PER_DEG
+from src.deploy.robot import SO101Robot
+from src.deploy.controllers import IKController
 
 
-def deg_to_steps(deg: float) -> int:
-    return int(deg * STEPS_PER_DEG)
+SAFE_JOINTS = np.zeros(5)  # Extended forward - safe for IK movements
+
+
+def ik_reset(robot, ik):
+    """IK reset motion matching ik_grasp_demo.py pattern."""
+    # Step 0: Move to reset position (all zeros)
+    print("Step 0: Moving to reset position...")
+    robot.send_action(SAFE_JOINTS, 1.0)
+    time.sleep(3.0)
+
+    # Set wrist to top-down orientation (both π/2)
+    print("Setting top-down wrist orientation...")
+    joints = robot.get_joint_positions_radians()
+    joints[3] = np.pi / 2
+    joints[4] = np.pi / 2
+    robot.send_action(joints, 1.0)
+    time.sleep(1.0)
+
+    # Sync IK and show position
+    ik.sync_joint_positions(robot.get_joint_positions_radians())
+    ee = ik.get_ee_position()
+    print(f"EE position: {ee}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Adjust wrist angles interactively")
+    parser = argparse.ArgumentParser(description="Adjust wrist angles interactively with IK reset")
     parser.add_argument("--port", type=str, default="/dev/ttyACM0", help="Robot serial port")
-    parser.add_argument("--flex", type=float, default=90.0, help="Initial wrist_flex angle")
-    parser.add_argument("--roll", type=float, default=90.0, help="Initial wrist_roll angle")
+    parser.add_argument("--flex", type=float, default=90.0, help="Initial wrist_flex angle (degrees)")
+    parser.add_argument("--roll", type=float, default=90.0, help="Initial wrist_roll angle (degrees)")
     args = parser.parse_args()
 
     print("=" * 60)
-    print("Wrist Angle Adjustment Tool")
+    print("Wrist Angle Adjustment Tool (with IK Reset)")
     print("=" * 60)
-    print()
 
-    # Connect to robot (use RANGE_M100_100 mode and normalize=False to avoid calibration)
-    print(f"Connecting to {args.port}...")
-    bus = FeetechMotorsBus(
-        port=args.port,
-        motors={
-            "shoulder_pan": Motor(1, "sts3215", MotorNormMode.RANGE_M100_100),
-            "shoulder_lift": Motor(2, "sts3215", MotorNormMode.RANGE_M100_100),
-            "elbow_flex": Motor(3, "sts3215", MotorNormMode.RANGE_M100_100),
-            "wrist_flex": Motor(4, "sts3215", MotorNormMode.RANGE_M100_100),
-            "wrist_roll": Motor(5, "sts3215", MotorNormMode.RANGE_M100_100),
-            "gripper": Motor(6, "sts3215", MotorNormMode.RANGE_M100_100),
-        },
-    )
-    bus.connect()
-    print("Connected!")
+    # Connect robot
+    print(f"\nConnecting to {args.port}...")
+    robot = SO101Robot(port=args.port)
+    if not robot.connect():
+        print("Failed to connect")
+        return
 
-    # Enable torque on wrist motors so they respond to commands
-    print("Enabling torque on wrist_flex and wrist_roll...")
-    bus.enable_torque(["wrist_flex", "wrist_roll"])
+    # Initialize IK
+    print("Initializing IK controller...")
+    ik = IKController()
+    print("Ready!")
 
-    # Read current positions (raw steps)
-    current = bus.sync_read("Present_Position", normalize=False)
-    print()
-    print("Current joint positions:")
-    for i, name in enumerate(MOTOR_NAMES):
-        steps = current[name]
-        deg = steps_to_deg(steps)
-        print(f"  [{i}] {name}: {deg:.1f}° (raw: {steps})")
+    # Show current positions
+    joints_rad = robot.get_joint_positions_radians()
+    joints_deg = np.rad2deg(joints_rad)
+    print(f"\nCurrent joints (deg): {joints_deg}")
 
-    # Initial wrist angles (in degrees)
+    # Lift to safe height
+    ik_reset(robot, ik)
+
+    # Initial wrist angles
     wrist_flex = args.flex
     wrist_roll = args.roll
 
@@ -79,15 +87,16 @@ def main():
     print("  +3 / -3    - Adjust wrist_flex by +/- 5 degrees")
     print("  +4 / -4    - Adjust wrist_roll by +/- 5 degrees")
     print("  r          - Read current positions")
+    print("  l          - Lift to safe height again")
     print("  q          - Quit and print config")
     print()
 
-    # Move to initial position
+    # Move to initial wrist position
     print(f"Moving to: wrist_flex={wrist_flex:.1f}°, wrist_roll={wrist_roll:.1f}°")
-    bus.sync_write("Goal_Position", {
-        "wrist_flex": deg_to_steps(wrist_flex),
-        "wrist_roll": deg_to_steps(wrist_roll),
-    }, normalize=False)
+    joints = robot.get_joint_positions_radians()
+    joints[3] = np.deg2rad(wrist_flex)
+    joints[4] = np.deg2rad(wrist_roll)
+    robot.send_action(joints, 1.0)
     time.sleep(0.5)
 
     try:
@@ -97,38 +106,52 @@ def main():
             if cmd == 'q' or cmd == 'quit':
                 break
             elif cmd == 'r':
-                current = bus.sync_read("Present_Position", normalize=False)
-                print("Current positions:")
-                for i, name in enumerate(MOTOR_NAMES):
-                    steps = current[name]
-                    deg = steps_to_deg(steps)
-                    print(f"  [{i}] {name}: {deg:.1f}° (raw: {steps})")
+                joints_rad = robot.get_joint_positions_radians()
+                joints_deg = np.rad2deg(joints_rad)
+                print(f"Current joints (deg): {joints_deg}")
+                ik.sync_joint_positions(joints_rad)
+                ee = ik.get_ee_position()
+                print(f"EE position: x={ee[0]:.3f}, y={ee[1]:.3f}, z={ee[2]:.3f}")
+            elif cmd == 'l':
+                ik_reset(robot, ik)
             elif cmd == '+3':
                 wrist_flex += 5
-                bus.sync_write("Goal_Position", {"wrist_flex": deg_to_steps(wrist_flex)}, normalize=False)
+                joints = robot.get_joint_positions_radians()
+                joints[3] = np.deg2rad(wrist_flex)
+                robot.send_action(joints, 1.0)
             elif cmd == '-3':
                 wrist_flex -= 5
-                bus.sync_write("Goal_Position", {"wrist_flex": deg_to_steps(wrist_flex)}, normalize=False)
+                joints = robot.get_joint_positions_radians()
+                joints[3] = np.deg2rad(wrist_flex)
+                robot.send_action(joints, 1.0)
             elif cmd == '+4':
                 wrist_roll += 5
-                bus.sync_write("Goal_Position", {"wrist_roll": deg_to_steps(wrist_roll)}, normalize=False)
+                joints = robot.get_joint_positions_radians()
+                joints[4] = np.deg2rad(wrist_roll)
+                robot.send_action(joints, 1.0)
             elif cmd == '-4':
                 wrist_roll -= 5
-                bus.sync_write("Goal_Position", {"wrist_roll": deg_to_steps(wrist_roll)}, normalize=False)
+                joints = robot.get_joint_positions_radians()
+                joints[4] = np.deg2rad(wrist_roll)
+                robot.send_action(joints, 1.0)
             elif cmd.startswith('3 '):
                 try:
                     wrist_flex = float(cmd.split()[1])
-                    bus.sync_write("Goal_Position", {"wrist_flex": deg_to_steps(wrist_flex)}, normalize=False)
+                    joints = robot.get_joint_positions_radians()
+                    joints[3] = np.deg2rad(wrist_flex)
+                    robot.send_action(joints, 1.0)
                 except Exception as e:
                     print(f"Error: {e}")
             elif cmd.startswith('4 '):
                 try:
                     wrist_roll = float(cmd.split()[1])
-                    bus.sync_write("Goal_Position", {"wrist_roll": deg_to_steps(wrist_roll)}, normalize=False)
+                    joints = robot.get_joint_positions_radians()
+                    joints[4] = np.deg2rad(wrist_roll)
+                    robot.send_action(joints, 1.0)
                 except Exception as e:
                     print(f"Error: {e}")
             elif cmd:
-                print("Unknown command. Use: 3 <angle>, 4 <angle>, +3, -3, +4, -4, r, q")
+                print("Unknown command. Use: 3 <angle>, 4 <angle>, +3, -3, +4, -4, r, l, q")
 
             time.sleep(0.1)
 
@@ -148,9 +171,7 @@ def main():
         print("Update fixed_reset_joint_positions:")
         print(f'  "fixed_reset_joint_positions": [0.0, -30.0, 90.0, {wrist_flex:.1f}, {wrist_roll:.1f}, 30.0]')
         print("=" * 60)
-        print("Disabling torque...")
-        bus.disable_torque(["wrist_flex", "wrist_roll"])
-        bus.disconnect()
+        robot.disconnect()
 
 
 if __name__ == "__main__":
