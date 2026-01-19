@@ -178,17 +178,87 @@ uv run python scripts/test_ik_motion.py
 uv run python scripts/test_ik_motion.py --dry_run
 ```
 
+## HIL-SERL (Human-in-the-Loop RL)
+
+Online RL training with human interventions using DrQ-v2.
+
+### Calibrate Robot
+
+Calibrate leader and follower arms:
+
+```bash
+# Calibrate follower
+uv run lerobot-calibrate \
+    --robot.type=so101_follower \
+    --robot.port=/dev/ttyACM0 \
+    --robot.id=ggando_so101_follower
+
+# Calibrate leader
+uv run lerobot-calibrate \
+    --teleop.type=so101_leader \
+    --teleop.port=/dev/ttyACM1 \
+    --teleop.id=ggando_so101_leader
+```
+
+### Adjust Wrist Angles
+
+Find correct wrist joint angles after recalibration:
+
+```bash
+uv run python scripts/adjust_wrist_angles.py
+```
+
+Commands: `3 <angle>` (wrist_flex), `4 <angle>` (wrist_roll), `+3/-3`, `+4/-4`, `r` (read), `l` (lift), `q` (quit)
+
+### Record Demonstrations (End-Effector Control)
+
+Record with IK-based end-effector control and locked wrist joints:
+
+```bash
+uv run lerobot-record --config outputs/hilserl_drqv2/record_config.json
+```
+
+### Start Learner
+
+Start the learner process (runs on GPU, loads offline buffer):
+
+```bash
+uv run lerobot-hilserl-learner --config outputs/hilserl_drqv2/train_config.json
+```
+
+### Start Actor
+
+Start the actor process (controls robot, sends transitions to learner):
+
+```bash
+uv run lerobot-hilserl-actor --config outputs/hilserl_drqv2/train_config.json
+```
+
+### Merge Datasets
+
+Merge multiple datasets with episode filtering:
+
+```bash
+uv run python scripts/merge_datasets.py
+```
+
+Edit the script to configure source datasets and excluded episodes.
+
 ## Quick Reference
 
 | Command | Description |
 |---------|-------------|
+| `lerobot-calibrate` | Calibrate robot or teleop arm |
 | `lerobot-teleoperate` | Test leader-follower mirroring |
 | `lerobot-record` | Record demonstrations (with `--teleop`) |
 | `lerobot-train` | Train a policy on recorded data |
 | `lerobot-record --policy.path=...` | Run IL policy inference |
+| `lerobot-hilserl-learner` | Start HIL-SERL learner |
+| `lerobot-hilserl-actor` | Start HIL-SERL actor |
 | `scripts/rl_inference.py` | Run RL policy (sim-to-real) |
 | `scripts/ik_reset_position.py` | Calibrate cube position |
-| `scripts/test_ik_motion.py` | Test IK controller |
+| `scripts/adjust_wrist_angles.py` | Adjust wrist joint angles |
+| `scripts/merge_datasets.py` | Merge datasets with filtering |
 
 ## Troubleshooting
 
