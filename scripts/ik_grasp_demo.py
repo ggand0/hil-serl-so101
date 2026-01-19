@@ -118,6 +118,7 @@ def main():
     parser.add_argument("--fps", type=float, default=20.0, help="Recording FPS")
     parser.add_argument("--gripper_open", type=float, default=1.0, help="Gripper open position (-1.0=closed, 1.0=fully open, default=1.0)")
     parser.add_argument("--half_open", action="store_true", help="Use half-open gripper (0.0 = 50%% physical)")
+    parser.add_argument("--grasp_z", type=float, default=0.03, help="Grasp Z height in meters (default: 0.03m)")
     args = parser.parse_args()
 
     # Set gripper open position from argument (--half_open overrides --gripper_open)
@@ -240,7 +241,7 @@ def main():
 
         # Step 2: Move down to block with gripper open
         grasp_pos = cube_pos.copy()
-        grasp_pos[2] += GRASP_Z_OFFSET + GRASP_HEIGHT_SAFETY  # 35mm above ground (safe grasp height for real robot)
+        grasp_pos[2] = args.grasp_z
         grasp_pos[1] += FINGER_WIDTH_OFFSET
         print(f"\n[Step 2] Moving down to block...")
         print(f"  Target: {grasp_pos}")
