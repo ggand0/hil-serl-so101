@@ -31,10 +31,10 @@ Mode selection:
 
 Architecture:
     Camera → Seg Model → Seg Mask ─┐
-            ↓                     ├─→ Stack (2, 84, 84) → Frame Stack (6, 84, 84) ─┐
-    Camera → Depth Model → Disparity ──┘                                           │
-                                                                                   ├─→ Policy → Cartesian Action → IK → Joint Commands → Robot
-    Robot State → FK → low_dim_state ──────────────────────────────────────────────┘
+            ↓                     ├─→ Stack (2, 84, 84) → Concatenate 3 frames → (6, 84, 84) ─┐
+    Camera → Depth Model → Disparity ──┘                                                       │
+                                                                                               ├─→ Policy → Cartesian Action → IK → Joint Commands → Robot
+    Robot State → FK → low_dim_state ──────────────────────────────────────────────────────────┘
 """
 
 import argparse
@@ -298,6 +298,7 @@ def main():
         return
     print(f"  Frame stack: {policy.frame_stack}")
     print(f"  State dim: {policy.state_dim}")
+    print(f"  Obs shape: ({policy.frame_stack * 2}, 84, 84) - concatenated channels")
 
     frame_stack = policy.frame_stack
     frame_buffer = deque(maxlen=frame_stack)
@@ -726,6 +727,12 @@ def main():
                     seg_mask_resized = cv2.resize(seg_mask, (84, 84), interpolation=cv2.INTER_NEAREST)
                     disparity_resized = cv2.resize(disparity, (84, 84), interpolation=cv2.INTER_LINEAR)
 
+                    # Debug: show raw seg classes BEFORE remapping
+                    if args.debug_state and step < 3:
+                        raw_unique, raw_counts = np.unique(seg_mask_resized, return_counts=True)
+                        raw_dist = dict(zip(raw_unique.tolist(), raw_counts.tolist()))
+                        print(f"    [SEG RAW] Before remap: {raw_dist}")
+
                     # Remap real segmentation classes to sim classes
                     # Real: 0=unlabeled, 1=bg, 2=table, 3=cube, 4=static, 5=moving
                     # Sim:  0=bg, 1=table, 2=cube, 3=static, 4=moving
@@ -744,20 +751,23 @@ def main():
                     # Update frame buffer
                     frame_buffer.append(obs_frame)
 
-                    # Get stacked observation
+                    # Get stacked observation via concatenate along channel axis
                     if len(frame_buffer) < frame_stack:
                         # Fill buffer if not full
                         while len(frame_buffer) < frame_stack:
                             frame_buffer.append(obs_frame)
-                    seg_depth_obs = np.stack(list(frame_buffer), axis=0)
+                    # Concatenate: 3 frames of (2, 84, 84) -> (6, 84, 84)
+                    seg_depth_obs = np.concatenate(list(frame_buffer), axis=0)
 
                 if seg_depth_obs is None:
                     print("  Perception frame error, ending episode")
                     break
 
                 # Save observation for debugging
+                # With (6, 84, 84) format, latest frame is last 2 channels
                 if args.save_obs and step < 5:
-                    obs_viz = visualize_seg_depth_obs(seg_depth_obs[-1])
+                    latest_frame = seg_depth_obs[-2:]  # (2, 84, 84)
+                    obs_viz = visualize_seg_depth_obs(latest_frame)
                     cv2.imwrite(f"seg_depth_obs_ep{episode+1}_step{step}.png", obs_viz)
                     print(
                         f"    Saved observation: seg_depth_obs_ep{episode+1}_step{step}.png"
@@ -765,7 +775,8 @@ def main():
 
                 # Write to observation video
                 if obs_video_writer is not None:
-                    obs_viz = visualize_seg_depth_obs(seg_depth_obs[-1])
+                    latest_frame = seg_depth_obs[-2:]  # (2, 84, 84)
+                    obs_viz = visualize_seg_depth_obs(latest_frame)
                     obs_video_writer.write(obs_viz)
 
                 # Record wrist camera (get raw frame for higher quality)
@@ -841,7 +852,11 @@ def main():
                 # Debug state output - extended to track drift behavior
                 if args.debug_state and step < 20:
                     # Compact per-step summary
-                    seg_ch = seg_depth_obs[-1, 0]  # Latest frame seg
+                    # With (6, 84, 84) format: channels 0,2,4 are seg, 1,3,5 are depth
+                    # Latest seg is channel 4
+                    if step == 0:
+                        print(f"    obs shape: {seg_depth_obs.shape} (expected: (6, 84, 84))")
+                    seg_ch = seg_depth_obs[4]  # Latest frame seg
                     unique, counts = np.unique(seg_ch, return_counts=True)
                     seg_summary = {k: v for k, v in zip(unique.tolist(), counts.tolist())}
                     latest_state = low_dim_obs[-1]

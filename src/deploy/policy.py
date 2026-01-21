@@ -519,8 +519,10 @@ class SegDepthPolicyRunner:
             image_size = self._cfg.env.image_size  # 84
             action_dim = 4  # delta XYZ + gripper
 
-            # Seg+depth: 2 channels per frame
+            # Seg+depth: 2 channels per frame, stacked along channel axis
+            # With frame_stack=3 and 2 channels: (6, 84, 84)
             obs_channels = 2
+            stacked_channels = frame_stack * obs_channels  # 6
 
             # Auto-detect state_dim from checkpoint weights
             agent_state = payload["agent"]
@@ -539,9 +541,9 @@ class SegDepthPolicyRunner:
             # Store for property access
             self._state_dim = state_dim
 
-            # Observation space with 2-channel images (key is "rgb" for wrapper compatibility)
+            # Observation space with frame_stack_on_channel=True: (6, 84, 84) not (3, 2, 84, 84)
             observation_space = {
-                "rgb": {"shape": (frame_stack, obs_channels, image_size, image_size)},
+                "rgb": {"shape": (stacked_channels, image_size, image_size)},
                 "low_dim_state": {"shape": (frame_stack, state_dim)},
             }
             action_space = {
@@ -588,7 +590,7 @@ class SegDepthPolicyRunner:
         """Run inference to get action.
 
         Args:
-            seg_depth: Seg+depth observation (frame_stack, 2, H, W) uint8.
+            seg_depth: Seg+depth observation (6, 84, 84) uint8 - frame_stack * 2 channels.
             low_dim_state: Low-dim state (frame_stack, state_dim) float32.
 
         Returns:
@@ -601,7 +603,7 @@ class SegDepthPolicyRunner:
             # Normalize to [0, 1] as in training
             seg_depth_norm = seg_depth.astype(np.float32) / 255.0
 
-            # Add batch dimension: (F, C, H, W) -> (1, F, C, H, W)
+            # Add batch dimension: (C, H, W) -> (1, C, H, W) where C=6 (frame_stack * 2)
             obs_tensor = torch.from_numpy(seg_depth_norm).unsqueeze(0).to(self.device)
             state_tensor = (
                 torch.from_numpy(low_dim_state).unsqueeze(0).float().to(self.device)
