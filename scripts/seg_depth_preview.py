@@ -146,6 +146,13 @@ def main():
                 print("Failed to capture frame")
                 continue
 
+            # Debug: raw frame stats
+            if args.debug_seg and frame_count < 3:
+                print(f"\n  [INFERENCE DEBUG] Frame {frame_count}")
+                print(f"    Raw frame: shape={frame.shape}, dtype={frame.dtype}")
+                print(f"    Raw frame range: [{frame.min()}, {frame.max()}]")
+                print(f"    Raw frame mean BGR: [{frame[:,:,0].mean():.1f}, {frame[:,:,1].mean():.1f}, {frame[:,:,2].mean():.1f}]")
+
             # Center crop to square
             h, w = frame.shape[:2]
             size = min(h, w)
@@ -153,9 +160,22 @@ def main():
             x_start = (w - size) // 2
             frame_cropped = frame[y_start:y_start + size, x_start:x_start + size]
 
+            # Debug: cropped frame stats
+            if args.debug_seg and frame_count < 3:
+                print(f"    Cropped: shape={frame_cropped.shape}, y_start={y_start}, x_start={x_start}, size={size}")
+                print(f"    Cropped mean BGR: [{frame_cropped[:,:,0].mean():.1f}, {frame_cropped[:,:,1].mean():.1f}, {frame_cropped[:,:,2].mean():.1f}]")
+
             # Run inference
             seg_mask = seg_model.predict(frame_cropped)
             disparity = depth_model.predict(frame_cropped)
+
+            # Debug: inference output stats
+            if args.debug_seg and frame_count < 3:
+                unique, counts = np.unique(seg_mask, return_counts=True)
+                class_dist = dict(zip(unique.tolist(), counts.tolist()))
+                print(f"    Seg mask: shape={seg_mask.shape}, dtype={seg_mask.dtype}")
+                print(f"    Seg class distribution: {class_dist}")
+                print(f"    Disparity: shape={disparity.shape}, dtype={disparity.dtype}, range=[{disparity.min()}, {disparity.max()}]")
 
             # Create preview panels
             preview_size = args.preview_size

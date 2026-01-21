@@ -656,6 +656,13 @@ def main():
                         break
                     last_raw_frame = frame.copy()
 
+                    # Debug: raw frame stats
+                    if args.debug_seg and step < 3:
+                        print(f"\n  [INFERENCE DEBUG] Step {step}")
+                        print(f"    Raw frame: shape={frame.shape}, dtype={frame.dtype}")
+                        print(f"    Raw frame range: [{frame.min()}, {frame.max()}]")
+                        print(f"    Raw frame mean BGR: [{frame[:,:,0].mean():.1f}, {frame[:,:,1].mean():.1f}, {frame[:,:,2].mean():.1f}]")
+
                     # Center crop to square (exactly like seg_depth_preview.py)
                     h, w = frame.shape[:2]
                     size = min(h, w)
@@ -663,15 +670,35 @@ def main():
                     x_start = (w - size) // 2
                     frame_cropped = frame[y_start:y_start + size, x_start:x_start + size]
 
+                    # Debug: cropped frame stats
+                    if args.debug_seg and step < 3:
+                        print(f"    Cropped: shape={frame_cropped.shape}, y_start={y_start}, x_start={x_start}, size={size}")
+                        print(f"    Cropped mean BGR: [{frame_cropped[:,:,0].mean():.1f}, {frame_cropped[:,:,1].mean():.1f}, {frame_cropped[:,:,2].mean():.1f}]")
+
                     # Run inference directly (exactly like seg_depth_preview.py)
                     seg_mask = seg_model.predict(frame_cropped)
                     disparity = depth_model.predict(frame_cropped)
                     last_seg_mask = seg_mask
                     last_disparity = disparity
 
+                    # Debug: inference output stats
+                    if args.debug_seg and step < 3:
+                        unique, counts = np.unique(seg_mask, return_counts=True)
+                        class_dist = dict(zip(unique.tolist(), counts.tolist()))
+                        print(f"    Seg mask: shape={seg_mask.shape}, dtype={seg_mask.dtype}")
+                        print(f"    Seg class distribution: {class_dist}")
+                        print(f"    Disparity: shape={disparity.shape}, dtype={disparity.dtype}, range=[{disparity.min()}, {disparity.max()}]")
+
                     # Resize to 84x84
                     seg_mask_resized = cv2.resize(seg_mask, (84, 84), interpolation=cv2.INTER_NEAREST)
                     disparity_resized = cv2.resize(disparity, (84, 84), interpolation=cv2.INTER_LINEAR)
+
+                    # Debug: resized output stats
+                    if args.debug_seg and step < 3:
+                        unique_r, counts_r = np.unique(seg_mask_resized, return_counts=True)
+                        class_dist_r = dict(zip(unique_r.tolist(), counts_r.tolist()))
+                        print(f"    Seg resized: shape={seg_mask_resized.shape}, classes={class_dist_r}")
+                        print(f"    Disp resized: shape={disparity_resized.shape}, range=[{disparity_resized.min()}, {disparity_resized.max()}]")
 
                     # Stack as (2, 84, 84)
                     obs_frame = np.stack([seg_mask_resized, disparity_resized], axis=0).astype(np.uint8)
