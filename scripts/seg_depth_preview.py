@@ -65,6 +65,11 @@ def parse_args():
         default="/home/gota/ggando/ml/pick-101",
         help="Path to pick-101 repository",
     )
+    parser.add_argument(
+        "--debug_seg",
+        action="store_true",
+        help="Enable debug logging for segmentation model",
+    )
     return parser.parse_args()
 
 
@@ -82,7 +87,7 @@ def main():
 
     # Load models
     print("\n[1/3] Loading segmentation model...")
-    seg_model = SegmentationModel(args.seg_checkpoint, device=args.device)
+    seg_model = SegmentationModel(args.seg_checkpoint, device=args.device, debug=args.debug_seg)
     if not seg_model.load():
         print("Failed to load segmentation model")
         return 1

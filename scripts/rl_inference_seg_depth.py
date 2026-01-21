@@ -176,6 +176,11 @@ def main():
         default=None,
         help="Save RGB|Seg|Depth preview video (path to output .mp4)",
     )
+    parser.add_argument(
+        "--debug_seg",
+        action="store_true",
+        help="Enable debug logging for segmentation model",
+    )
 
     args = parser.parse_args()
 
@@ -220,7 +225,7 @@ def main():
     else:
         # Load segmentation model FIRST (before policy imports pollute sys.path)
         print("  Loading segmentation model...")
-        seg_model = SegmentationModel(args.seg_checkpoint, device=args.device)
+        seg_model = SegmentationModel(args.seg_checkpoint, device=args.device, debug=args.debug_seg)
         if not seg_model.load():
             print("Failed to load segmentation model. Exiting.")
             return

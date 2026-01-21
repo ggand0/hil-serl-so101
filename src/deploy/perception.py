@@ -39,16 +39,20 @@ class SegmentationModel:
         self,
         checkpoint_path: str | Path,
         device: str = "cuda",
+        debug: bool = False,
     ):
         """Initialize segmentation model.
 
         Args:
             checkpoint_path: Path to EfficientViT checkpoint (.ckpt file).
             device: Torch device for inference.
+            debug: Enable debug logging.
         """
         self.checkpoint_path = Path(checkpoint_path)
         self.device = device
+        self.debug = debug
         self._model = None
+        self._call_count = 0
 
     def load(self) -> bool:
         """Load model from checkpoint.
@@ -59,6 +63,13 @@ class SegmentationModel:
         if not self.checkpoint_path.exists():
             print(f"Segmentation checkpoint not found: {self.checkpoint_path}")
             return False
+
+        if self.debug:
+            print(f"[SEG DEBUG] Loading from: {self.checkpoint_path}")
+            print(f"[SEG DEBUG] Device: {self.device}")
+            print(f"[SEG DEBUG] sys.path (first 5):")
+            for i, p in enumerate(sys.path[:5]):
+                print(f"  [{i}] {p}")
 
         # Add pick-101 paths (both root and training dir for relative imports)
         pick101_str = str(PICK101_ROOT)
@@ -71,12 +82,28 @@ class SegmentationModel:
         sys.path.insert(0, training_str)
         sys.path.insert(0, pick101_str)
 
+        if self.debug:
+            print(f"[SEG DEBUG] sys.path after manipulation (first 5):")
+            for i, p in enumerate(sys.path[:5]):
+                print(f"  [{i}] {p}")
+
         try:
             from infer_efficientvit_seg import SegmentationInference
+
+            if self.debug:
+                import infer_efficientvit_seg
+                print(f"[SEG DEBUG] SegmentationInference from: {infer_efficientvit_seg.__file__}")
 
             self._model = SegmentationInference(
                 str(self.checkpoint_path), device=self.device
             )
+
+            if self.debug:
+                print(f"[SEG DEBUG] Model img_height: {self._model.img_height}")
+                print(f"[SEG DEBUG] Model img_width: {self._model.img_width}")
+                print(f"[SEG DEBUG] Model num_classes: {self._model.num_classes}")
+                print(f"[SEG DEBUG] Model device: {self._model.device}")
+
             print(f"Loaded segmentation model: {self.checkpoint_path.name}")
             return True
         except Exception as e:
@@ -97,7 +124,23 @@ class SegmentationModel:
         """
         if self._model is None:
             raise RuntimeError("Model not loaded. Call load() first.")
-        return self._model.predict(bgr_image)
+
+        self._call_count += 1
+
+        if self.debug and self._call_count <= 3:
+            print(f"[SEG DEBUG] predict() call #{self._call_count}")
+            print(f"  Input shape: {bgr_image.shape}, dtype: {bgr_image.dtype}")
+            print(f"  Input range: [{bgr_image.min()}, {bgr_image.max()}]")
+            print(f"  Input mean (BGR): [{bgr_image[:,:,0].mean():.1f}, {bgr_image[:,:,1].mean():.1f}, {bgr_image[:,:,2].mean():.1f}]")
+
+        mask = self._model.predict(bgr_image)
+
+        if self.debug and self._call_count <= 3:
+            unique, counts = np.unique(mask, return_counts=True)
+            print(f"  Output shape: {mask.shape}, dtype: {mask.dtype}")
+            print(f"  Output classes: {dict(zip(unique, counts))}")
+
+        return mask
 
 
 class DepthModel:
@@ -202,9 +245,9 @@ class SegDepthPreprocessor:
 
     Pipeline (matching training exactly):
     1. Capture BGR frame (640x480)
-    2. Run segmentation -> (480, 640) class IDs
-    3. Run depth estimation -> (480, 640) disparity
-    4. Center crop to square (480x480)
+    2. Center crop to square (480x480)
+    3. Run segmentation -> (480, 480) class IDs
+    4. Run depth estimation -> (480, 480) disparity
     5. Resize to 84x84
     6. Stack as 2-channel: (2, 84, 84)
     7. Frame stacking: (frame_stack, 2, 84, 84)
@@ -289,9 +332,10 @@ class SegDepthPreprocessor:
             if self._cap is not None:
                 ret, frame = self._cap.read()
                 if ret:
-                    # Warm up models with real frames
-                    _ = self._seg_model.predict(frame)
-                    _ = self._depth_model.predict(frame)
+                    # Center crop before warm-up (same as inference)
+                    cropped = self._center_crop_square(frame)
+                    _ = self._seg_model.predict(cropped)
+                    _ = self._depth_model.predict(cropped)
         print("  Warm up complete.")
 
     def reset(self):
