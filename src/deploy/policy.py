@@ -541,10 +541,10 @@ class SegDepthPolicyRunner:
             # Store for property access
             self._state_dim = state_dim
 
-            # Observation space with frame_stack_on_channel=True
-            # Encoder expects (num_views, channels, height, width): (1, 6, 84, 84)
+            # Observation space: (frame_stack, channels, H, W) = (3, 2, 84, 84)
+            # Agent's flatten_time_dim_into_channel_dim will convert to (6, 84, 84) internally
             observation_space = {
-                "rgb": {"shape": (1, stacked_channels, image_size, image_size)},
+                "rgb": {"shape": (frame_stack, obs_channels, image_size, image_size)},
                 "low_dim_state": {"shape": (frame_stack, state_dim)},
             }
             action_space = {
@@ -591,7 +591,7 @@ class SegDepthPolicyRunner:
         """Run inference to get action.
 
         Args:
-            seg_depth: Seg+depth observation (6, 84, 84) uint8 - frame_stack * 2 channels.
+            seg_depth: Seg+depth observation (frame_stack, 2, 84, 84) uint8 via np.stack.
             low_dim_state: Low-dim state (frame_stack, state_dim) float32.
 
         Returns:
@@ -604,8 +604,9 @@ class SegDepthPolicyRunner:
             # Normalize to [0, 1] as in training
             seg_depth_norm = seg_depth.astype(np.float32) / 255.0
 
-            # Add batch and view dimensions: (C, H, W) -> (1, 1, C, H, W)
-            # batch=1, num_views=1, channels=6, height=84, width=84
+            # Add batch and view dimensions: (T, C, H, W) -> (1, 1, T, C, H, W)
+            # batch=1, num_views=1, frame_stack=3, channels=2, height=84, width=84
+            # Agent's flatten_time_dim_into_channel_dim will convert (1,1,3,2,84,84) -> (1,1,6,84,84)
             obs_tensor = torch.from_numpy(seg_depth_norm).unsqueeze(0).unsqueeze(0).to(self.device)
             state_tensor = (
                 torch.from_numpy(low_dim_state).unsqueeze(0).float().to(self.device)

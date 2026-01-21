@@ -31,7 +31,7 @@ Mode selection:
 
 Architecture:
     Camera → Seg Model → Seg Mask ─┐
-            ↓                     ├─→ Stack (2, 84, 84) → Concatenate 3 frames → (6, 84, 84) ─┐
+            ↓                     ├─→ Stack (2, 84, 84) → np.stack 3 frames → (3, 2, 84, 84) ─┐
     Camera → Depth Model → Disparity ──┘                                                       │
                                                                                                ├─→ Policy → Cartesian Action → IK → Joint Commands → Robot
     Robot State → FK → low_dim_state ──────────────────────────────────────────────────────────┘
@@ -298,7 +298,7 @@ def main():
         return
     print(f"  Frame stack: {policy.frame_stack}")
     print(f"  State dim: {policy.state_dim}")
-    print(f"  Obs shape: ({policy.frame_stack * 2}, 84, 84) - concatenated channels")
+    print(f"  Obs shape: ({policy.frame_stack}, 2, 84, 84) - stacked frames")
 
     frame_stack = policy.frame_stack
     frame_buffer = deque(maxlen=frame_stack)
@@ -751,22 +751,23 @@ def main():
                     # Update frame buffer
                     frame_buffer.append(obs_frame)
 
-                    # Get stacked observation via concatenate along channel axis
+                    # Get stacked observation via stack (NOT concatenate!)
+                    # Agent's flatten_time_dim_into_channel_dim will flatten internally
                     if len(frame_buffer) < frame_stack:
                         # Fill buffer if not full
                         while len(frame_buffer) < frame_stack:
                             frame_buffer.append(obs_frame)
-                    # Concatenate: 3 frames of (2, 84, 84) -> (6, 84, 84)
-                    seg_depth_obs = np.concatenate(list(frame_buffer), axis=0)
+                    # Stack: 3 frames of (2, 84, 84) -> (3, 2, 84, 84)
+                    seg_depth_obs = np.stack(list(frame_buffer), axis=0)
 
                 if seg_depth_obs is None:
                     print("  Perception frame error, ending episode")
                     break
 
                 # Save observation for debugging
-                # With (6, 84, 84) format, latest frame is last 2 channels
+                # With (3, 2, 84, 84) format, latest frame is seg_depth_obs[-1]
                 if args.save_obs and step < 5:
-                    latest_frame = seg_depth_obs[-2:]  # (2, 84, 84)
+                    latest_frame = seg_depth_obs[-1]  # (2, 84, 84)
                     obs_viz = visualize_seg_depth_obs(latest_frame)
                     cv2.imwrite(f"seg_depth_obs_ep{episode+1}_step{step}.png", obs_viz)
                     print(
@@ -775,7 +776,7 @@ def main():
 
                 # Write to observation video
                 if obs_video_writer is not None:
-                    latest_frame = seg_depth_obs[-2:]  # (2, 84, 84)
+                    latest_frame = seg_depth_obs[-1]  # (2, 84, 84)
                     obs_viz = visualize_seg_depth_obs(latest_frame)
                     obs_video_writer.write(obs_viz)
 
@@ -852,11 +853,11 @@ def main():
                 # Debug state output - extended to track drift behavior
                 if args.debug_state and step < 20:
                     # Compact per-step summary
-                    # With (6, 84, 84) format: channels 0,2,4 are seg, 1,3,5 are depth
-                    # Latest seg is channel 4
+                    # With (3, 2, 84, 84) format: seg_depth_obs[frame_idx, channel, H, W]
+                    # Latest seg is seg_depth_obs[-1, 0]
                     if step == 0:
-                        print(f"    obs shape: {seg_depth_obs.shape} (expected: (6, 84, 84))")
-                    seg_ch = seg_depth_obs[4]  # Latest frame seg
+                        print(f"    obs shape: {seg_depth_obs.shape} (expected: (3, 2, 84, 84))")
+                    seg_ch = seg_depth_obs[-1, 0]  # Latest frame seg channel
                     unique, counts = np.unique(seg_ch, return_counts=True)
                     seg_summary = {k: v for k, v in zip(unique.tolist(), counts.tolist())}
                     latest_state = low_dim_obs[-1]

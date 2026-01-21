@@ -516,7 +516,7 @@ class SegDepthPreprocessor:
         """Get frame-stacked observation for policy.
 
         Returns:
-            Stacked frames (6, 84, 84) uint8 via concatenate along channel axis.
+            Stacked frames (3, 2, 84, 84) uint8 via np.stack.
         """
         frame = self.capture_and_preprocess()
         if frame is None:
@@ -527,8 +527,9 @@ class SegDepthPreprocessor:
         if len(self._frame_buffer) < self.frame_stack:
             return None
 
-        # Concatenate along channel axis: 3 frames of (2, 84, 84) -> (6, 84, 84)
-        stacked = np.concatenate(list(self._frame_buffer), axis=0)
+        # Stack frames: 3 frames of (2, 84, 84) -> (3, 2, 84, 84)
+        # Agent's flatten_time_dim_into_channel_dim will flatten internally
+        stacked = np.stack(list(self._frame_buffer), axis=0)
         return stacked
 
 
@@ -611,6 +612,6 @@ class MockSegDepthPreprocessor:
         if len(self._frame_buffer) < self.frame_stack:
             return None
 
-        # Concatenate along channel axis: 3 frames of (2, 84, 84) -> (6, 84, 84)
-        stacked = np.concatenate(list(self._frame_buffer), axis=0)
+        # Stack frames: 3 frames of (2, 84, 84) -> (3, 2, 84, 84)
+        stacked = np.stack(list(self._frame_buffer), axis=0)
         return stacked
