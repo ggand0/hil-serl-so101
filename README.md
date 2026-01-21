@@ -178,6 +178,98 @@ uv run python scripts/test_ik_motion.py
 uv run python scripts/test_ik_motion.py --dry_run
 ```
 
+## HIL-SERL (Human-in-the-Loop RL)
+
+Online RL training with human interventions using DrQ-v2.
+
+### Calibrate Robot
+
+Calibrate leader and follower arms:
+
+```bash
+# Calibrate follower
+uv run lerobot-calibrate \
+    --robot.type=so101_follower \
+    --robot.port=/dev/ttyACM0 \
+    --robot.id=ggando_so101_follower
+
+# Calibrate leader
+uv run lerobot-calibrate \
+    --teleop.type=so101_leader \
+    --teleop.port=/dev/ttyACM1 \
+    --teleop.id=ggando_so101_leader
+```
+
+### Adjust Wrist Angles
+
+Find correct wrist joint angles after recalibration:
+
+```bash
+uv run python scripts/adjust_wrist_angles.py
+```
+
+Commands: `3 <angle>` (wrist_flex), `4 <angle>` (wrist_roll), `+3/-3`, `+4/-4`, `r` (read), `l` (lift), `q` (quit)
+
+### Record Demonstrations (End-Effector Control)
+
+Record with IK-based end-effector control and locked wrist joints:
+
+```bash
+uv run lerobot-record --config outputs/hilserl_drqv2/record_config.json
+```
+
+### Start Learner
+
+Start the learner process (runs on GPU, loads offline buffer):
+
+```bash
+uv run lerobot-hilserl-learner --config outputs/hilserl_drqv2/train_config.json
+```
+
+### Start Actor
+
+Start the actor process (controls robot, sends transitions to learner):
+
+```bash
+uv run lerobot-hilserl-actor --config outputs/hilserl_drqv2/train_config.json
+```
+
+### Merge Datasets
+
+Merge multiple datasets with episode filtering:
+
+```bash
+uv run python scripts/merge_datasets.py
+```
+
+Edit the script to configure source datasets and excluded episodes.
+
+## Segmentation Data Collection
+
+Record video footage with random gripper motion for training segmentation models:
+
+```bash
+uv run python scripts/record_camera.py --record seg_data.mp4 --random_gripper --duration 60 --preview --camera 2
+```
+
+- `--camera`: Camera index (find with `uv run lerobot-find-cameras opencv`)
+- `--random_gripper`: Randomly opens/closes gripper, arm torque disabled for manual positioning
+- `--preview`: Show live feed while recording
+- `--duration`: Recording length in seconds
+- `--gripper_interval`: Average time between gripper changes (default: 1.0s)
+
+### IK Grasp Demo
+
+Run automated grasp sequence with video recording:
+
+```bash
+uv run python scripts/ik_grasp_demo.py --cube_x 0.25 --cube_y 0.1 --grasp_z 0.03 --output grasp_demo.mp4
+```
+
+- `--cube_x`, `--cube_y`: Cube position in meters (Y+ is left)
+- `--grasp_z`: Grasp height (default: 0.03m)
+- `--camera_index`: Camera index for recording
+
 ## Quick Reference
 
 | Command | Description |
@@ -189,6 +281,10 @@ uv run python scripts/test_ik_motion.py --dry_run
 | `scripts/rl_inference.py` | Run RL policy (sim-to-real) |
 | `scripts/ik_reset_position.py` | Calibrate cube position |
 | `scripts/test_ik_motion.py` | Test IK controller |
+| `scripts/adjust_wrist_angles.py` | Adjust wrist joint angles |
+| `scripts/merge_datasets.py` | Merge datasets with filtering |
+| `scripts/record_camera.py` | Record camera with random gripper |
+| `scripts/depth_estimation.py` | Depth Anything V2 inference |
 
 ## Troubleshooting
 

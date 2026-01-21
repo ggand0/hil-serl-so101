@@ -456,3 +456,190 @@ class GenesisPPORunner:
     def frame_stack(self) -> int:
         """Frame stack (1 for PPO, no stacking)."""
         return 1
+
+
+class SegDepthPolicyRunner:
+    """Runs inference with a trained DrQ-v2 policy using seg+depth observations.
+
+    The policy expects:
+    - seg_depth: (batch, frame_stack, 2, 84, 84) float32 normalized [0, 1]
+    - low_dim_state: (batch, frame_stack, state_dim) float32
+
+    And outputs:
+    - action: (batch, action_dim) float32 in [-1, 1]
+
+    Action space (4 dims):
+    - delta X, Y, Z for end-effector position
+    - gripper open/close (-1 to 1)
+
+    Note: Uses "rgb" as observation key to match training wrapper convention,
+    even though the actual input is seg+depth (2 channels instead of 3).
+    """
+
+    def __init__(
+        self,
+        checkpoint_path: str | Path,
+        device: str = "cuda",
+    ):
+        """Initialize policy runner.
+
+        Args:
+            checkpoint_path: Path to snapshot .pt file.
+            device: Torch device for inference.
+        """
+        self.checkpoint_path = Path(checkpoint_path)
+        self.device = device
+
+        self._agent = None
+        self._cfg = None
+        self._step = 0  # Used for exploration schedule (1e6 = eval mode)
+
+    def load(self) -> bool:
+        """Load checkpoint and initialize agent.
+
+        Returns:
+            True if loaded successfully.
+        """
+        if not self.checkpoint_path.exists():
+            print(f"Checkpoint not found: {self.checkpoint_path}")
+            return False
+
+        try:
+            # Load checkpoint
+            with open(self.checkpoint_path, "rb") as f:
+                payload = torch.load(f, map_location="cpu", weights_only=False)
+
+            self._cfg = payload["cfg"]
+
+            # Import hydra for agent creation
+            import hydra
+
+            # Get observation and action space info from config
+            frame_stack = self._cfg.frame_stack  # 3
+            image_size = self._cfg.env.image_size  # 84
+            action_dim = 4  # delta XYZ + gripper
+
+            # Seg+depth: 2 channels per frame
+            obs_channels = 2
+
+            # Auto-detect state_dim from checkpoint weights
+            agent_state = payload["agent"]
+            low_dim_weight_key = "actor_model.input_preprocess_modules.low_dim_obs.0.weight"
+            if low_dim_weight_key in agent_state:
+                total_low_dim = agent_state[low_dim_weight_key].shape[1]
+                state_dim = total_low_dim // frame_stack
+                print(
+                    f"  Auto-detected state_dim={state_dim} from checkpoint (total={total_low_dim}, frame_stack={frame_stack})"
+                )
+            else:
+                # Fallback to proprioception only (no cube_pos for sim2real)
+                state_dim = 18
+                print(f"  Using default state_dim={state_dim}")
+
+            # Store for property access
+            self._state_dim = state_dim
+
+            # Observation space with 2-channel images (key is "rgb" for wrapper compatibility)
+            observation_space = {
+                "rgb": {"shape": (frame_stack, obs_channels, image_size, image_size)},
+                "low_dim_state": {"shape": (frame_stack, state_dim)},
+            }
+            action_space = {
+                "shape": (action_dim,),
+                "minimum": -1.0,
+                "maximum": 1.0,
+            }
+
+            # Create agent using hydra
+            self._agent = hydra.utils.instantiate(
+                self._cfg.method,
+                device=self.device,
+                observation_space=observation_space,
+                action_space=action_space,
+                num_train_envs=self._cfg.num_train_envs,
+                replay_alpha=self._cfg.replay.alpha,
+                replay_beta=self._cfg.replay.beta,
+                frame_stack_on_channel=self._cfg.frame_stack_on_channel,
+                intrinsic_reward_module=None,
+            )
+
+            # Load weights
+            self._agent.load_state_dict(payload["agent"])
+            self._agent.train(False)
+
+            # Set step high for eval mode (no exploration noise)
+            self._step = 1_000_000
+
+            print(f"Loaded seg+depth checkpoint: {self.checkpoint_path}")
+            return True
+
+        except Exception as e:
+            print(f"Failed to load checkpoint: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return False
+
+    def get_action(
+        self,
+        seg_depth: np.ndarray,
+        low_dim_state: np.ndarray,
+    ) -> np.ndarray:
+        """Run inference to get action.
+
+        Args:
+            seg_depth: Seg+depth observation (frame_stack, 2, H, W) uint8.
+            low_dim_state: Low-dim state (frame_stack, state_dim) float32.
+
+        Returns:
+            Action (action_dim,) float32 in [-1, 1].
+        """
+        if self._agent is None:
+            raise RuntimeError("Policy not loaded. Call load() first.")
+
+        with torch.no_grad():
+            # Normalize to [0, 1] as in training
+            seg_depth_norm = seg_depth.astype(np.float32) / 255.0
+
+            # Add batch dimension: (F, C, H, W) -> (1, F, C, H, W)
+            obs_tensor = torch.from_numpy(seg_depth_norm).unsqueeze(0).to(self.device)
+            state_tensor = (
+                torch.from_numpy(low_dim_state).unsqueeze(0).float().to(self.device)
+            )
+
+            obs = {
+                "rgb": obs_tensor,  # Key is "rgb" to match training wrapper
+                "low_dim_state": state_tensor,
+            }
+
+            # Get action from agent
+            action = self._agent.act(obs, step=self._step, eval_mode=True)
+
+            if isinstance(action, torch.Tensor):
+                action = action.cpu().numpy()
+
+            # Remove batch dim: (1, action_dim) -> (action_dim,)
+            action = action.squeeze(0)
+
+            # Handle ActionSequence wrapper output if present
+            if action.ndim > 1:
+                action = action[0]
+
+            return action
+
+    @property
+    def action_dim(self) -> int:
+        """Action dimension (4: delta XYZ + gripper)."""
+        return 4
+
+    @property
+    def state_dim(self) -> int:
+        """State dimension (auto-detected from checkpoint)."""
+        return getattr(self, "_state_dim", 18)
+
+    @property
+    def frame_stack(self) -> int:
+        """Number of stacked frames."""
+        if self._cfg is not None:
+            return self._cfg.frame_stack
+        return 3
