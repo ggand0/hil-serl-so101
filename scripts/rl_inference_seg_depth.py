@@ -45,11 +45,6 @@ from src.deploy.perception import SegmentationModel, DepthModel, MockSegDepthPre
 
 
 def main():
-    # Import other deploy modules INSIDE main() to avoid polluting module state
-    from src.deploy.policy import SegDepthPolicyRunner, LowDimStateBuilder
-    from src.deploy.robot import SO101Robot, MockSO101Robot
-    from src.deploy.controllers import IKController
-
     parser = argparse.ArgumentParser(
         description="Run seg+depth RL policy on real SO-101 robot"
     )
@@ -184,10 +179,17 @@ def main():
 
     args = parser.parse_args()
 
-    # Add pick-101 paths (same order as seg_depth_preview.py)
+    # Add pick-101 paths FIRST (same order as seg_depth_preview.py)
+    # CRITICAL: These paths must be added BEFORE any robobase/hydra imports
     pick101_root = Path(args.pick101_root)
     sys.path.insert(0, str(pick101_root))
     sys.path.insert(0, str(pick101_root / "external" / "robobase"))
+
+    # Import deploy modules AFTER pick-101 paths are set up
+    # This ensures robobase/hydra imports don't pollute the segmentation inference
+    from src.deploy.policy import SegDepthPolicyRunner, LowDimStateBuilder
+    from src.deploy.robot import SO101Robot, MockSO101Robot
+    from src.deploy.controllers import IKController
 
     # Derive use_genesis flag for convenience
     use_genesis = args.genesis_mode or args.genesis_to_mujoco
