@@ -21,18 +21,20 @@ Usage:
 """
 
 import argparse
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
+# Add project root BEFORE other imports
+_script_dir = Path(__file__).resolve().parent
+_project_root = _script_dir.parent
+sys.path.insert(0, str(_project_root))
+
 import cv2
 import numpy as np
 
-import sys
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
-
-from src.deploy.camera import CameraPreprocessor
+from src.deploy.perception import SegmentationModel, DepthModel
 from src.deploy.robot import SO101Robot, MockSO101Robot
 from src.deploy.controllers import IKController
 
@@ -119,15 +121,29 @@ def main():
     parser.add_argument("--gripper_open", type=float, default=1.0, help="Gripper open position (-1.0=closed, 1.0=fully open, default=1.0)")
     parser.add_argument("--half_open", action="store_true", help="Use half-open gripper (0.0 = 50%% physical)")
     parser.add_argument("--grasp_z", type=float, default=0.03, help="Grasp Z height in meters (default: 0.03m)")
+    parser.add_argument("--seg_preview", action="store_true", help="Show live RGB|Seg|Depth preview")
+    parser.add_argument("--seg_checkpoint", type=str,
+                        default="/home/gota/ggando/ml/pick-101/outputs/efficientvit_seg_merged/best-v1.ckpt",
+                        help="Segmentation checkpoint path")
+    parser.add_argument("--pick101_root", type=str, default="/home/gota/ggando/ml/pick-101",
+                        help="Path to pick-101 repository")
     args = parser.parse_args()
 
     # Set gripper open position from argument (--half_open overrides --gripper_open)
     gripper_open = 0.0 if args.half_open else args.gripper_open
 
+    # Add pick-101 paths if using seg preview
+    if args.seg_preview:
+        pick101_root = Path(args.pick101_root)
+        sys.path.insert(0, str(pick101_root))
+        sys.path.insert(0, str(pick101_root / "external" / "robobase"))
+
     print("=" * 60)
     print("IK Grasp Demo with Wrist Cam Recording")
     print("=" * 60)
     print(f"Gripper open position: {gripper_open}")
+    if args.seg_preview:
+        print("Segmentation preview: ENABLED")
 
     # Initialize robot
     print("\n[1/3] Initializing robot...")
@@ -181,18 +197,61 @@ def main():
         video_writer = cv2.VideoWriter(output_path, fourcc, args.fps, frame_size)
         print(f"  Recording to: {output_path}")
 
+    # Load seg/depth models if preview enabled
+    seg_model = None
+    depth_model = None
+    if args.seg_preview and camera is not None:
+        print("\n[3.5/4] Loading perception models for preview...")
+        seg_model = SegmentationModel(args.seg_checkpoint, device="cuda")
+        if not seg_model.load():
+            print("  WARNING: Failed to load seg model, preview disabled")
+            seg_model = None
+        depth_model = DepthModel(device="cuda")
+        if not depth_model.load():
+            print("  WARNING: Failed to load depth model, preview disabled")
+            depth_model = None
+
+    # Seg preview colors (BGR)
+    seg_colors = np.array([
+        [0, 0, 0],        # 0: unlabeled
+        [128, 128, 128],  # 1: background
+        [0, 128, 0],      # 2: table
+        [0, 165, 255],    # 3: cube
+        [255, 0, 0],      # 4: static_finger
+        [255, 0, 255],    # 5: moving_finger
+    ], dtype=np.uint8)
+
     # Safe positions
     RESET_JOINTS = np.zeros(5)  # All motors in middle of range (arm extended forward)
     REST_JOINTS = np.array([-0.0591, -1.8415, 1.7135, 0.7210, -0.1097])  # Folded rest
 
     def record_frame():
-        """Capture and record a frame."""
-        if camera is not None and video_writer is not None:
+        """Capture and record a frame, show seg preview if enabled."""
+        if camera is not None:
             ret, frame = camera.read()
             if ret:
                 cropped = center_crop_square(frame)
                 resized = cv2.resize(cropped, frame_size)
-                video_writer.write(resized)
+                if video_writer is not None:
+                    video_writer.write(resized)
+
+                # Show seg preview if enabled
+                if seg_model is not None and depth_model is not None:
+                    seg_mask = seg_model.predict(cropped)
+                    disparity = depth_model.predict(cropped)
+
+                    # Build preview panels
+                    preview_size = 240
+                    rgb_panel = cv2.resize(cropped, (preview_size, preview_size))
+                    seg_colored = seg_colors[seg_mask]
+                    seg_panel = cv2.resize(seg_colored, (preview_size, preview_size), interpolation=cv2.INTER_NEAREST)
+                    depth_colored = cv2.applyColorMap(disparity, cv2.COLORMAP_INFERNO)
+                    depth_panel = cv2.resize(depth_colored, (preview_size, preview_size))
+
+                    preview = np.hstack([rgb_panel, seg_panel, depth_panel])
+                    cv2.imshow("Seg Preview (q=quit)", preview)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        raise KeyboardInterrupt
 
     def record_steps(num_steps, delay=0.05):
         """Record multiple frames during a pause."""
@@ -345,6 +404,8 @@ def main():
         record_steps(10)
 
         # Cleanup
+        if args.seg_preview:
+            cv2.destroyAllWindows()
         if video_writer is not None:
             video_writer.release()
             print(f"Video saved: {output_path}")
