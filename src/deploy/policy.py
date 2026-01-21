@@ -541,9 +541,10 @@ class SegDepthPolicyRunner:
             # Store for property access
             self._state_dim = state_dim
 
-            # Observation space with frame_stack_on_channel=True: (6, 84, 84) not (3, 2, 84, 84)
+            # Observation space with frame_stack_on_channel=True
+            # Encoder expects (num_views, channels, height, width): (1, 6, 84, 84)
             observation_space = {
-                "rgb": {"shape": (stacked_channels, image_size, image_size)},
+                "rgb": {"shape": (1, stacked_channels, image_size, image_size)},
                 "low_dim_state": {"shape": (frame_stack, state_dim)},
             }
             action_space = {
@@ -603,8 +604,9 @@ class SegDepthPolicyRunner:
             # Normalize to [0, 1] as in training
             seg_depth_norm = seg_depth.astype(np.float32) / 255.0
 
-            # Add batch dimension: (C, H, W) -> (1, C, H, W) where C=6 (frame_stack * 2)
-            obs_tensor = torch.from_numpy(seg_depth_norm).unsqueeze(0).to(self.device)
+            # Add batch and view dimensions: (C, H, W) -> (1, 1, C, H, W)
+            # batch=1, num_views=1, channels=6, height=84, width=84
+            obs_tensor = torch.from_numpy(seg_depth_norm).unsqueeze(0).unsqueeze(0).to(self.device)
             state_tensor = (
                 torch.from_numpy(low_dim_state).unsqueeze(0).float().to(self.device)
             )
