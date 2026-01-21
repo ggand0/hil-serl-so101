@@ -604,10 +604,11 @@ class SegDepthPolicyRunner:
             # Normalize to [0, 1] as in training
             seg_depth_norm = seg_depth.astype(np.float32) / 255.0
 
-            # Add batch and view dimensions: (T, C, H, W) -> (1, 1, T, C, H, W)
-            # batch=1, num_views=1, frame_stack=3, channels=2, height=84, width=84
-            # Agent's flatten_time_dim_into_channel_dim will convert (1,1,3,2,84,84) -> (1,1,6,84,84)
-            obs_tensor = torch.from_numpy(seg_depth_norm).unsqueeze(0).unsqueeze(0).to(self.device)
+            # Add batch dimension only: (T, C, H, W) -> (1, T, C, H, W)
+            # batch=1, frame_stack=3, channels=2, height=84, width=84
+            # Agent's stack_tensor_dictionary adds view axis: (1, T, C, H, W) -> (1, 1, T, C, H, W)
+            # Agent's flatten_time_dim_into_channel_dim converts: (1, 1, 3, 2, 84, 84) -> (1, 1, 6, 84, 84)
+            obs_tensor = torch.from_numpy(seg_depth_norm).unsqueeze(0).to(self.device)
             state_tensor = (
                 torch.from_numpy(low_dim_state).unsqueeze(0).float().to(self.device)
             )
