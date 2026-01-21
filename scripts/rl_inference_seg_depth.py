@@ -60,7 +60,7 @@ def main():
     parser.add_argument(
         "--seg_checkpoint",
         type=str,
-        default="/home/gota/ggando/ml/pick-101/outputs/efficientvit_seg_merged/best.ckpt",
+        default="/home/gota/ggando/ml/pick-101/outputs/efficientvit_seg_merged/best-v1.ckpt",
         help="Path to EfficientViT segmentation checkpoint (.ckpt file)",
     )
     parser.add_argument(
