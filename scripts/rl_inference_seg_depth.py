@@ -11,11 +11,23 @@ Usage:
         --seg_checkpoint /path/to/efficientvit_seg/best.ckpt \
         --dry_run
 
-    # Real robot
+    # Real robot with MuJoCo-trained policy (pick-101)
     uv run python scripts/rl_inference_seg_depth.py \
-        --checkpoint /path/to/seg_depth_snapshot.pt \
+        --checkpoint ~/ggando/ml/pick-101/runs/seg_depth_rl/.../snapshot.pt \
+        --seg_checkpoint ~/ggando/ml/pick-101/outputs/efficientvit_seg_merged/best-v1.ckpt \
+        --mujoco_mode
+
+    # Real robot with Genesis-trained policy (requires coordinate transform)
+    uv run python scripts/rl_inference_seg_depth.py \
+        --checkpoint /path/to/genesis_snapshot.pt \
         --seg_checkpoint /path/to/efficientvit_seg/best.ckpt \
         --genesis_mode
+
+Mode selection:
+    --mujoco_mode: For policies trained in pick-101 MuJoCo sim (drqv2_lift_seg_depth_*)
+                   No coordinate transform, gripper=0.3, wrist locked at pi/2
+    --genesis_mode: For policies trained in Genesis sim
+                    Applies Genesis->MuJoCo coordinate transform
 
 Architecture:
     Camera → Seg Model → Seg Mask ─┐
@@ -131,7 +143,7 @@ def main():
         default=None,
         help="External camera index for third-person view recording",
     )
-    # Genesis-specific flags
+    # Simulator-specific flags
     parser.add_argument(
         "--genesis_to_mujoco",
         action="store_true",
@@ -141,6 +153,11 @@ def main():
         "--genesis_mode",
         action="store_true",
         help="Enable all Genesis-specific fixes: joint offset, coordinate transform, wrist locking",
+    )
+    parser.add_argument(
+        "--mujoco_mode",
+        action="store_true",
+        help="MuJoCo-trained policy mode: no coord transform, gripper=0.3, wrist locked (for pick-101 policies)",
     )
     parser.add_argument(
         "--pick101_root",
@@ -196,13 +213,25 @@ def main():
     from src.deploy.robot import SO101Robot, MockSO101Robot
     from src.deploy.controllers import IKController
 
-    # Derive use_genesis flag for convenience
+    # Derive mode flags
     use_genesis = args.genesis_mode or args.genesis_to_mujoco
+    use_mujoco = args.mujoco_mode
+
+    # Coordinate transform only for Genesis-trained policies
+    apply_coord_transform = use_genesis and not use_mujoco
+
+    # Wrist locking for both modes (top-down grasp orientation)
+    lock_wrist = use_genesis or use_mujoco
 
     print("=" * 60)
     print("SO-101 RL Inference (DrQ-v2 Seg+Depth)")
     print("=" * 60)
-    if use_genesis:
+    if use_mujoco:
+        print("[MuJoCo mode enabled] (for pick-101 trained policies)")
+        print("  - Coordinate transform: None (MuJoCo native)")
+        print("  - Locked joints: [3, 4] (both wrist joints)")
+        print("  - Gripper reset: 0.3 (partially open)")
+    elif use_genesis:
         print("[Genesis mode enabled]")
         print("  - Coordinate transform: Genesis -> MuJoCo")
         print("  - Locked joints: [3, 4] (both wrist joints)")
@@ -372,11 +401,13 @@ def main():
     GRASP_Z_OFFSET = 0.005
     CUBE_Z = 0.015  # Cube height on table
 
-    if use_genesis:
-        HEIGHT_OFFSET = 0.03  # Genesis: 30mm above grasp height
-        RESET_GRIPPER = 0.3  # Genesis uses partially open gripper
+    # Both MuJoCo and Genesis modes use 30mm above grasp height and partially open gripper
+    # (matching curriculum_stage=3 training)
+    if use_mujoco or use_genesis:
+        HEIGHT_OFFSET = 0.03  # 30mm above grasp height
+        RESET_GRIPPER = 0.3  # Partially open (matches gripper_open=0.3 in training)
     else:
-        HEIGHT_OFFSET = 0.03  # MuJoCo: 3cm above grasp height
+        HEIGHT_OFFSET = 0.03  # Default: 3cm above grasp height
         RESET_GRIPPER = 1.0  # Fully open
 
     # Safe positions
@@ -562,8 +593,8 @@ def main():
             ee_pos = move_to_initial_pose_with_wrist_lock(robot, ik, safe_target)
             print(f"    Reached: {ee_pos}")
 
-            # Step 3b: Lower to final position
-            if use_genesis:
+            # Step 3b: Lower to final position (for both MuJoCo and Genesis modes)
+            if use_mujoco or use_genesis:
                 print("  Step 3b: Lowering to grasp height...")
                 final_target = np.array(
                     [
@@ -607,7 +638,9 @@ def main():
                     disparity = depth_model.predict(frame_cropped)
                     seg_mask_resized = cv2.resize(seg_mask, (84, 84), interpolation=cv2.INTER_NEAREST)
                     disparity_resized = cv2.resize(disparity, (84, 84), interpolation=cv2.INTER_LINEAR)
-                    obs_frame = np.stack([seg_mask_resized, disparity_resized], axis=0).astype(np.uint8)
+                    # Remap real segmentation classes to sim classes (shift by 1)
+                    seg_mask_remapped = np.clip(seg_mask_resized.astype(np.int32) - 1, 0, 4).astype(np.uint8)
+                    obs_frame = np.stack([seg_mask_remapped, disparity_resized], axis=0).astype(np.uint8)
                     frame_buffer.append(obs_frame)
 
                 if len(frame_buffer) < frame_stack:
@@ -693,15 +726,20 @@ def main():
                     seg_mask_resized = cv2.resize(seg_mask, (84, 84), interpolation=cv2.INTER_NEAREST)
                     disparity_resized = cv2.resize(disparity, (84, 84), interpolation=cv2.INTER_LINEAR)
 
+                    # Remap real segmentation classes to sim classes
+                    # Real: 0=unlabeled, 1=bg, 2=table, 3=cube, 4=static, 5=moving
+                    # Sim:  0=bg, 1=table, 2=cube, 3=static, 4=moving
+                    seg_mask_remapped = np.clip(seg_mask_resized.astype(np.int32) - 1, 0, 4).astype(np.uint8)
+
                     # Debug: resized output stats
                     if args.debug_seg and step < 3:
-                        unique_r, counts_r = np.unique(seg_mask_resized, return_counts=True)
+                        unique_r, counts_r = np.unique(seg_mask_remapped, return_counts=True)
                         class_dist_r = dict(zip(unique_r.tolist(), counts_r.tolist()))
-                        print(f"    Seg resized: shape={seg_mask_resized.shape}, classes={class_dist_r}")
+                        print(f"    Seg remapped: shape={seg_mask_remapped.shape}, classes={class_dist_r}")
                         print(f"    Disp resized: shape={disparity_resized.shape}, range=[{disparity_resized.min()}, {disparity_resized.max()}]")
 
                     # Stack as (2, 84, 84)
-                    obs_frame = np.stack([seg_mask_resized, disparity_resized], axis=0).astype(np.uint8)
+                    obs_frame = np.stack([seg_mask_remapped, disparity_resized], axis=0).astype(np.uint8)
 
                     # Update frame buffer
                     frame_buffer.append(obs_frame)
@@ -800,22 +838,22 @@ def main():
                 # Stack low_dim states
                 low_dim_obs = np.stack(list(state_buffer), axis=0).astype(np.float32)
 
-                # Debug state output
-                if args.debug_state and step == 0:
-                    print("\n  [DEBUG] Low-dim state breakdown (step 0):")
+                # Debug state output - extended to track drift behavior
+                if args.debug_state and step < 20:
+                    # Compact per-step summary
+                    seg_ch = seg_depth_obs[-1, 0]  # Latest frame seg
+                    unique, counts = np.unique(seg_ch, return_counts=True)
+                    seg_summary = {k: v for k, v in zip(unique.tolist(), counts.tolist())}
                     latest_state = low_dim_obs[-1]
-                    print(f"    joint_pos (6): {latest_state[0:6]}")
-                    print(f"    joint_vel (6): {latest_state[6:12]}")
-                    print(f"    gripper_pos (3): {latest_state[12:15]}")
-                    print(f"    gripper_euler (3): {latest_state[15:18]}")
+                    ee_xyz = latest_state[12:15]
+                    print(f"\n  [DEBUG] Step {step}:")
+                    print(f"    seg: {seg_summary}")
+                    print(f"    ee_xyz: [{ee_xyz[0]:.4f}, {ee_xyz[1]:.4f}, {ee_xyz[2]:.4f}]")
 
-                    print("\n  [DEBUG] Seg+depth obs shape: {seg_depth_obs.shape}")
-                    print(
-                        f"    Seg channel: min={seg_depth_obs[-1, 0].min()}, max={seg_depth_obs[-1, 0].max()}"
-                    )
-                    print(
-                        f"    Depth channel: min={seg_depth_obs[-1, 1].min()}, max={seg_depth_obs[-1, 1].max()}"
-                    )
+                    if step == 0:
+                        print(f"    joint_pos (6): {latest_state[0:6]}")
+                        print(f"    joint_vel (6): {latest_state[6:12]}")
+                        print(f"    gripper_euler (3): {latest_state[15:18]}")
 
                 # Slice low_dim_obs to match policy's expected state_dim
                 if low_dim_obs.shape[-1] != policy.state_dim:
@@ -825,17 +863,15 @@ def main():
                 action = policy.get_action(seg_depth_obs, low_dim_obs)
 
                 # Debug action output
-                if args.debug_state and step < 10:
-                    print(
-                        f"    [DEBUG] Step {step}: raw_action={action} (before any transforms)"
-                    )
+                if args.debug_state and step < 20:
+                    print(f"    action: [{action[0]:.3f}, {action[1]:.3f}, {action[2]:.3f}] grip={action[3]:.3f}")
 
                 # Parse action
                 delta_xyz = action[:3].copy()
                 gripper_action = action[3]
 
-                # Transform from Genesis frame to MuJoCo frame
-                if use_genesis:
+                # Transform from Genesis frame to MuJoCo frame (only for Genesis-trained policies)
+                if apply_coord_transform:
                     genesis_x, genesis_y, genesis_z = delta_xyz
                     delta_xyz = np.array(
                         [
@@ -856,7 +892,7 @@ def main():
                     delta_xyz,
                     current_joints,
                     action_scale=args.action_scale,
-                    locked_joints=[3, 4] if use_genesis else [4],
+                    locked_joints=[3, 4] if lock_wrist else [4],
                 )
 
                 # Debug IK
@@ -898,7 +934,7 @@ def main():
 
                 # Status
                 if step % 20 == 0:
-                    if use_genesis:
+                    if use_mujoco or use_genesis:
                         print(
                             f"  Step {step}: delta=[{delta_xyz[0]:.2f},{delta_xyz[1]:.2f},{delta_xyz[2]:.2f}] "
                             f"gripper={gripper_action:.2f} ee=[{ee_pos[0]:.3f},{ee_pos[1]:.3f},{ee_pos[2]:.3f}]"
