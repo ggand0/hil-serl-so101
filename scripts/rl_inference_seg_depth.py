@@ -26,28 +26,30 @@ Architecture:
 """
 
 import argparse
+import sys
 import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
 
+# Add project root BEFORE any other imports (same as seg_depth_preview.py)
+_script_dir = Path(__file__).resolve().parent
+_project_root = _script_dir.parent
+sys.path.insert(0, str(_project_root))
+
 import cv2
 import numpy as np
 
-# Add project root to path
-import sys
-
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
-
-# Import local deploy modules
-from src.deploy.perception import SegDepthPreprocessor, MockSegDepthPreprocessor
-from src.deploy.policy import SegDepthPolicyRunner, LowDimStateBuilder
-from src.deploy.robot import SO101Robot, MockSO101Robot
-from src.deploy.controllers import IKController
+# Import perception models ONLY at module level (same as seg_depth_preview.py)
+from src.deploy.perception import SegmentationModel, DepthModel, MockSegDepthPreprocessor
 
 
 def main():
+    # Import other deploy modules INSIDE main() to avoid polluting module state
+    from src.deploy.policy import SegDepthPolicyRunner, LowDimStateBuilder
+    from src.deploy.robot import SO101Robot, MockSO101Robot
+    from src.deploy.controllers import IKController
+
     parser = argparse.ArgumentParser(
         description="Run seg+depth RL policy on real SO-101 robot"
     )
@@ -182,7 +184,7 @@ def main():
 
     args = parser.parse_args()
 
-    # Add pick-101 paths for robobase and training modules
+    # Add pick-101 paths (same order as seg_depth_preview.py)
     pick101_root = Path(args.pick101_root)
     sys.path.insert(0, str(pick101_root))
     sys.path.insert(0, str(pick101_root / "external" / "robobase"))
@@ -198,50 +200,76 @@ def main():
         print("  - Coordinate transform: Genesis -> MuJoCo")
         print("  - Locked joints: [3, 4] (both wrist joints)")
 
-    # === 1. Load Policy ===
-    print("\n[1/4] Loading policy...")
+    # === 1. Initialize Perception (BEFORE policy to avoid import conflicts) ===
+    print("\n[1/4] Initializing perception (segmentation + depth)...")
+    seg_model = None
+    depth_model = None
+    cap = None
+    mock_preprocessor = None
+
+    if args.dry_run:
+        print("  [DRY RUN] Using mock perception")
+        mock_preprocessor = MockSegDepthPreprocessor(
+            target_size=(84, 84),
+            frame_stack=3,
+        )
+        mock_preprocessor.load_models()
+        mock_preprocessor.open_camera()
+    else:
+        # Load segmentation model FIRST (before policy imports pollute sys.path)
+        print("  Loading segmentation model...")
+        seg_model = SegmentationModel(args.seg_checkpoint, device=args.device)
+        if not seg_model.load():
+            print("Failed to load segmentation model. Exiting.")
+            return
+
+        # Load depth model
+        print("  Loading depth model...")
+        depth_model = DepthModel(device=args.device)
+        if not depth_model.load():
+            print("Failed to load depth model. Exiting.")
+            return
+
+        # Open camera
+        print(f"  Opening camera {args.camera_index}...")
+        cap = cv2.VideoCapture(args.camera_index)
+        if not cap.isOpened():
+            print(f"Failed to open camera {args.camera_index}. Exiting.")
+            return
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+        # Warm up camera and models
+        print("  Warming up...")
+        for _ in range(10):
+            ret, frame = cap.read()
+            if ret:
+                h, w = frame.shape[:2]
+                size = min(h, w)
+                y_start = (h - size) // 2
+                x_start = (w - size) // 2
+                frame_cropped = frame[y_start:y_start + size, x_start:x_start + size]
+                _ = seg_model.predict(frame_cropped)
+                _ = depth_model.predict(frame_cropped)
+
+    # === 2. Load Policy ===
+    print("\n[2/4] Loading policy...")
     policy = SegDepthPolicyRunner(args.checkpoint, device=args.device)
     if not policy.load():
         print("Failed to load policy. Exiting.")
+        if cap is not None:
+            cap.release()
         return
     print(f"  Frame stack: {policy.frame_stack}")
     print(f"  State dim: {policy.state_dim}")
 
-    # === 2. Initialize Perception ===
-    print("\n[2/4] Initializing perception (segmentation + depth)...")
-    preprocessor = None
-    use_mock_preprocessor = args.dry_run
+    frame_stack = policy.frame_stack
+    frame_buffer = deque(maxlen=frame_stack)
 
-    if not use_mock_preprocessor:
-        preprocessor = SegDepthPreprocessor(
-            seg_checkpoint=args.seg_checkpoint,
-            target_size=(84, 84),
-            frame_stack=policy.frame_stack,
-            camera_index=args.camera_index,
-            device=args.device,
-        )
-        if not preprocessor.load_models():
-            print("  Failed to load perception models, using mock mode.")
-            use_mock_preprocessor = True
-            preprocessor = None
-        elif not preprocessor.open_camera():
-            print("  Failed to open camera, using mock mode.")
-            use_mock_preprocessor = True
-            preprocessor.close()
-            preprocessor = None
-        else:
-            preprocessor.warm_up()
-            print(f"  Camera opened at index {args.camera_index}")
-    else:
-        print("  [DRY RUN] Using mock perception")
-
-    if use_mock_preprocessor:
-        preprocessor = MockSegDepthPreprocessor(
-            target_size=(84, 84),
-            frame_stack=policy.frame_stack,
-        )
-        preprocessor.load_models()
-        preprocessor.open_camera()
+    # Update mock preprocessor frame_stack if needed
+    if args.dry_run and mock_preprocessor is not None:
+        mock_preprocessor._frame_buffer = deque(maxlen=frame_stack)
+        mock_preprocessor.frame_stack = frame_stack
 
     # === 3. Initialize Robot ===
     print("\n[3/4] Initializing robot...")
@@ -252,7 +280,8 @@ def main():
         robot = SO101Robot(port=args.robot_port)
         if not robot.connect():
             print("Failed to connect to robot. Exiting.")
-            preprocessor.close()
+            if cap is not None:
+                cap.release()
             return
 
     # === 4. Initialize IK Controller ===
@@ -262,7 +291,8 @@ def main():
         print(f"  IK controller ready (damping={ik.damping})")
     except Exception as e:
         print(f"  Failed to initialize IK: {e}")
-        preprocessor.close()
+        if cap is not None:
+            cap.release()
         robot.disconnect()
         return
 
@@ -476,7 +506,7 @@ def main():
                 episode_prefix = f"ep{episode+1:02d}_{timestamp}"
 
                 # Wrist camera writer (480x480 square crop)
-                if not use_mock_preprocessor:
+                if not args.dry_run:
                     wrist_path = record_dir / f"{episode_prefix}_wrist.mp4"
                     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
                     wrist_writer = cv2.VideoWriter(
@@ -541,10 +571,41 @@ def main():
 
             # Reset buffers
             state_buffer.clear()
-            preprocessor.reset()
-            if not preprocessor.fill_buffer():
-                print("  Failed to fill perception buffer, skipping episode")
-                continue
+            frame_buffer.clear()
+
+            # Fill perception buffer with initial frames
+            if args.dry_run:
+                mock_preprocessor.reset()
+                if not mock_preprocessor.fill_buffer():
+                    print("  Failed to fill perception buffer, skipping episode")
+                    continue
+            else:
+                # Flush stale camera frames
+                for _ in range(5):
+                    cap.read()
+                time.sleep(0.1)
+
+                # Fill buffer with initial observations
+                for i in range(frame_stack):
+                    ret, frame = cap.read()
+                    if not ret:
+                        print(f"  Failed to capture frame {i+1}/{frame_stack}")
+                        break
+                    h, w = frame.shape[:2]
+                    size = min(h, w)
+                    y_start = (h - size) // 2
+                    x_start = (w - size) // 2
+                    frame_cropped = frame[y_start:y_start + size, x_start:x_start + size]
+                    seg_mask = seg_model.predict(frame_cropped)
+                    disparity = depth_model.predict(frame_cropped)
+                    seg_mask_resized = cv2.resize(seg_mask, (84, 84), interpolation=cv2.INTER_NEAREST)
+                    disparity_resized = cv2.resize(disparity, (84, 84), interpolation=cv2.INTER_LINEAR)
+                    obs_frame = np.stack([seg_mask_resized, disparity_resized], axis=0).astype(np.uint8)
+                    frame_buffer.append(obs_frame)
+
+                if len(frame_buffer) < frame_stack:
+                    print("  Failed to fill perception buffer, skipping episode")
+                    continue
 
             # Get initial robot state and compute FK
             joint_pos_rad = robot.get_joint_positions_radians()
@@ -574,8 +635,50 @@ def main():
             for step in range(args.episode_length):
                 step_start = time.time()
 
-                # Get seg+depth observation
-                seg_depth_obs = preprocessor.get_stacked_observation()
+                # Get seg+depth observation - DIRECT CAPTURE (like seg_depth_preview.py)
+                if args.dry_run:
+                    seg_depth_obs = mock_preprocessor.get_stacked_observation()
+                    last_raw_frame = None
+                    last_seg_mask = None
+                    last_disparity = None
+                else:
+                    # Capture frame directly
+                    ret, frame = cap.read()
+                    if not ret:
+                        print("  Camera read failed, ending episode")
+                        break
+                    last_raw_frame = frame.copy()
+
+                    # Center crop to square (exactly like seg_depth_preview.py)
+                    h, w = frame.shape[:2]
+                    size = min(h, w)
+                    y_start = (h - size) // 2
+                    x_start = (w - size) // 2
+                    frame_cropped = frame[y_start:y_start + size, x_start:x_start + size]
+
+                    # Run inference directly (exactly like seg_depth_preview.py)
+                    seg_mask = seg_model.predict(frame_cropped)
+                    disparity = depth_model.predict(frame_cropped)
+                    last_seg_mask = seg_mask
+                    last_disparity = disparity
+
+                    # Resize to 84x84
+                    seg_mask_resized = cv2.resize(seg_mask, (84, 84), interpolation=cv2.INTER_NEAREST)
+                    disparity_resized = cv2.resize(disparity, (84, 84), interpolation=cv2.INTER_LINEAR)
+
+                    # Stack as (2, 84, 84)
+                    obs_frame = np.stack([seg_mask_resized, disparity_resized], axis=0).astype(np.uint8)
+
+                    # Update frame buffer
+                    frame_buffer.append(obs_frame)
+
+                    # Get stacked observation
+                    if len(frame_buffer) < frame_stack:
+                        # Fill buffer if not full
+                        while len(frame_buffer) < frame_stack:
+                            frame_buffer.append(obs_frame)
+                    seg_depth_obs = np.stack(list(frame_buffer), axis=0)
+
                 if seg_depth_obs is None:
                     print("  Perception frame error, ending episode")
                     break
@@ -594,12 +697,10 @@ def main():
                     obs_video_writer.write(obs_viz)
 
                 # Record wrist camera (get raw frame for higher quality)
-                if wrist_writer is not None:
-                    raw_frame = preprocessor.get_raw_frame()
-                    if raw_frame is not None:
-                        cropped = center_crop_square(raw_frame)
-                        resized = cv2.resize(cropped, (480, 480))
-                        wrist_writer.write(resized)
+                if wrist_writer is not None and last_raw_frame is not None:
+                    cropped = center_crop_square(last_raw_frame)
+                    resized = cv2.resize(cropped, (480, 480))
+                    wrist_writer.write(resized)
 
                 # Record external camera
                 if external_writer is not None and external_cap is not None:
@@ -609,29 +710,58 @@ def main():
                         external_writer.write(cropped)
 
                 # Show preview GUI and/or record preview video
-                if args.preview or preview_video_writer is not None:
-                    preview = preprocessor.get_preview_image(preview_size=240)
-                    if preview is not None:
-                        # Add step info overlay
-                        cv2.putText(
-                            preview,
-                            f"Ep {episode+1} Step {step}",
-                            (10, preview.shape[0] - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.5,
-                            (255, 255, 255),
-                            1,
-                        )
-                        # Write to video
-                        if preview_video_writer is not None:
-                            preview_video_writer.write(preview)
-                        # Show GUI
-                        if args.preview:
-                            cv2.imshow("Seg+Depth Preview (q to quit)", preview)
-                            key = cv2.waitKey(1) & 0xFF
-                            if key == ord("q"):
-                                print("  Preview quit requested")
-                                raise KeyboardInterrupt
+                if (args.preview or preview_video_writer is not None) and not args.dry_run:
+                    # Build preview image directly
+                    preview_size = 240
+                    seg_colors = np.array([
+                        [0, 0, 0],        # 0: unlabeled - black
+                        [128, 128, 128],  # 1: background - gray
+                        [0, 128, 0],      # 2: table - green
+                        [0, 165, 255],    # 3: cube - orange
+                        [255, 0, 0],      # 4: static_finger - blue
+                        [255, 0, 255],    # 5: moving_finger - magenta
+                    ], dtype=np.uint8)
+
+                    # RGB panel
+                    rgb_cropped = center_crop_square(last_raw_frame)
+                    rgb_panel = cv2.resize(rgb_cropped, (preview_size, preview_size))
+
+                    # Seg panel
+                    if last_seg_mask is not None:
+                        seg_colored = seg_colors[last_seg_mask]
+                        seg_panel = cv2.resize(seg_colored, (preview_size, preview_size), interpolation=cv2.INTER_NEAREST)
+                    else:
+                        seg_panel = np.zeros((preview_size, preview_size, 3), dtype=np.uint8)
+
+                    # Depth panel
+                    if last_disparity is not None:
+                        depth_colored = cv2.applyColorMap(last_disparity, cv2.COLORMAP_INFERNO)
+                        depth_panel = cv2.resize(depth_colored, (preview_size, preview_size))
+                    else:
+                        depth_panel = np.zeros((preview_size, preview_size, 3), dtype=np.uint8)
+
+                    preview = np.hstack([rgb_panel, seg_panel, depth_panel])
+
+                    # Add step info overlay
+                    cv2.putText(
+                        preview,
+                        f"Ep {episode+1} Step {step}",
+                        (10, preview.shape[0] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5,
+                        (255, 255, 255),
+                        1,
+                    )
+                    # Write to video
+                    if preview_video_writer is not None:
+                        preview_video_writer.write(preview)
+                    # Show GUI
+                    if args.preview:
+                        cv2.imshow("Seg+Depth Preview (q to quit)", preview)
+                        key = cv2.waitKey(1) & 0xFF
+                        if key == ord("q"):
+                            print("  Preview quit requested")
+                            raise KeyboardInterrupt
 
                 # Stack low_dim states
                 low_dim_obs = np.stack(list(state_buffer), axis=0).astype(np.float32)
@@ -777,7 +907,8 @@ def main():
         if preview_video_writer is not None:
             preview_video_writer.release()
             print(f"  Saved preview video: {args.save_preview_video}")
-        preprocessor.close()
+        if cap is not None:
+            cap.release()
         if external_cap is not None:
             external_cap.release()
 
