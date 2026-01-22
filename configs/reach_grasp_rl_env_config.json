@@ -3,19 +3,18 @@
     "name": "real_robot",
     "task": "reach_and_grasp",
     "fps": 10,
-    "mode": "record",
-    "repo_id": "gtgando/so101_reach_grasp_cube_reward_v1",
+    "mode": null,
+    "repo_id": null,
     "dataset_root": null,
-    "num_episodes": 3,
+    "num_episodes": 1000,
     "episode": 0,
     "device": "cuda",
-    "push_to_hub": true,
-    "number_of_steps_after_success": 30,
+    "push_to_hub": false,
     "reward_classifier_pretrained_path": "/home/gota/ggando/ml/so101-playground/outputs/reward_classifier_reach_grasp/checkpoints/002000/pretrained_model",
     "features": {
         "observation.images.gripper_cam": {
             "type": "VISUAL",
-            "shape": [3, 84, 84]
+            "shape": [3, 128, 128]
         },
         "observation.state": {
             "type": "STATE",
@@ -76,7 +75,7 @@
         "use_radians": true,
         "normalize_images": false,
         "crop_params_dict": null,
-        "resize_size": [84, 84],
+        "resize_size": [128, 128],
         "control_time_s": 30.0,
         "fixed_reset_joint_positions": [-0.4, -104.84, 97.05, 44.09, 89.45, 4.35],
         "reset_time_s": 2.0,

@@ -1,6 +1,7 @@
 {
     "policy": {
         "type": "reward_classifier",
+        "push_to_hub": false,
         "model_name": "helper2424/resnet10",
         "model_type": "cnn",
         "num_cameras": 1,
@@ -12,7 +13,7 @@
         "learning_rate": 1e-4,
         "weight_decay": 0.01,
         "grad_clip_norm": 1.0,
-        "image_size": 84,
+        "image_size": 128,
         "device": "cuda",
         "use_amp": true,
         "input_features": {
@@ -30,7 +31,7 @@
     },
     "dataset": {
         "repo_id": "gtgando/so101_reach_grasp_cube_reward",
-        "root": null,
+        "root": "/home/gota/.cache/huggingface/lerobot/gtgando/so101_reach_grasp_cube_reward",
         "episodes": null,
         "image_transforms": {
             "enable": true,
