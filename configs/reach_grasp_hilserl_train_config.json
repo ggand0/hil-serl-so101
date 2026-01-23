@@ -179,7 +179,7 @@
                 "max": [0.35, 0.15, 0.25]
             },
             "max_gripper_pos": 50.0,
-            "action_scale": 0.02
+            "action_scale": 0.1
         },
         "teleop": {
             "type": "so101_leader",
