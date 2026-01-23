@@ -260,15 +260,27 @@ Record with IK-based end-effector control and locked wrist joints:
 uv run lerobot-record --config outputs/hilserl_drqv2/record_config.json
 ```
 
-### Start Learner
+### Train with SAC (Reach and Grasp)
+
+Run learner and actor in separate terminals:
+
+**Terminal 1 (Learner):**
+```bash
+uv run python -m lerobot.scripts.rl.learner --config configs/reach_grasp_hilserl_train_config.json
+```
+
+**Terminal 2 (Actor):**
+```bash
+uv run python -m lerobot.scripts.rl.actor --config configs/reach_grasp_hilserl_train_config.json
+```
+
+### Train with DrQ-v2
 
 Start the learner process (runs on GPU, loads offline buffer):
 
 ```bash
 uv run lerobot-hilserl-learner --config outputs/hilserl_drqv2/train_config.json
 ```
-
-### Start Actor
 
 Start the actor process (controls robot, sends transitions to learner):
 
@@ -295,8 +307,10 @@ Edit the script to configure source datasets and excluded episodes.
 | `lerobot-record` | Record demonstrations (with `--teleop`) |
 | `lerobot-train` | Train a policy on recorded data |
 | `lerobot-record --policy.path=...` | Run IL policy inference |
-| `lerobot-hilserl-learner` | Start HIL-SERL learner |
-| `lerobot-hilserl-actor` | Start HIL-SERL actor |
+| `python -m lerobot.scripts.rl.learner` | Start SAC learner |
+| `python -m lerobot.scripts.rl.actor` | Start SAC actor |
+| `lerobot-hilserl-learner` | Start DrQ-v2 learner |
+| `lerobot-hilserl-actor` | Start DrQ-v2 actor |
 | `scripts/rl_inference.py` | Run RGB RL policy (sim-to-real) |
 | `scripts/rl_inference_seg_depth.py` | Run seg+depth RL policy (sim-to-real) |
 | `scripts/ik_reset_position.py` | Calibrate cube position |
