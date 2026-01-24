@@ -77,7 +77,7 @@
         "crop_params_dict": null,
         "resize_size": [128, 128],
         "control_time_s": 30.0,
-        "fixed_reset_joint_positions": [-0.4, -104.84, 97.05, 44.09, 89.45, 4.35],
+        "fixed_reset_joint_positions": [2.11, -109.69, 96.24, 41.04, 90.35, -12.13],
         "reset_time_s": 2.0,
         "use_ik_reset": false,
         "use_gripper": true,

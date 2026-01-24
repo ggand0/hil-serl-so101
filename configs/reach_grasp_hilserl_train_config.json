@@ -1,7 +1,7 @@
 {
     "output_dir": "/home/gota/ggando/ml/so101-playground/outputs/hilserl_reach_grasp_v3",
     "job_name": "hilserl_reach_grasp",
-    "resume": false,
+    "resume": true,
     "seed": 1000,
     "num_workers": 4,
     "batch_size": 256,
@@ -202,13 +202,14 @@
             },
             "resize_size": [128, 128],
             "control_time_s": 30.0,
-            "fixed_reset_joint_positions": [-0.4, -95.0, 90.0, 90.0, 89.45, 4.35],
+            "fixed_reset_joint_positions": [2.11, -109.69, 96.24, 41.04, 90.35, -12.13],
             "reset_time_s": 2.0,
             "use_ik_reset": false,
             "use_gripper": true,
             "gripper_quantization_threshold": 0.8,
             "gripper_penalty": 0.0,
-            "gripper_penalty_in_reward": false
+            "gripper_penalty_in_reward": false,
+            "display_reward_preview": true
         }
     }
 }

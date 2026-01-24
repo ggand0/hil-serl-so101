@@ -260,18 +260,56 @@ Record with IK-based end-effector control and locked wrist joints:
 uv run lerobot-record --config outputs/hilserl_drqv2/record_config.json
 ```
 
+### Record Reward Classifier Dataset
+
+Record demonstrations for training the reward classifier:
+
+```bash
+uv run python -m lerobot.scripts.rl.gym_manipulator --config_path configs/reward_classifier_record_15ep_config.json
+```
+
+**Controls:**
+- Leader arm controls follower (intervention enabled by default)
+- `ESC` - End episode
+- `q` - Quit recording
+
+### Train Reward Classifier
+
+```bash
+uv run python -m lerobot.scripts.train --config_path configs/reward_classifier_train_config.json
+```
+
+### Live Reward Classifier Preview
+
+Test the reward classifier with live camera feed:
+
+```bash
+uv run python scripts/reward_classifier_live_preview.py
+```
+
+**Options:**
+- `--model_path` - Path to trained classifier (default: v3)
+- `--threshold` - Classification threshold (default: 0.5)
+- `--record output.mp4` - Record video
+
+**Controls:**
+- `t` - Increase threshold by 0.1
+- `r` - Reset threshold to 0.5
+- `v` - Toggle recording
+- `q` - Quit
+
 ### Train with SAC (Reach and Grasp)
 
 Run learner and actor in separate terminals:
 
 **Terminal 1 (Learner):**
 ```bash
-uv run python -m lerobot.scripts.rl.learner --config configs/reach_grasp_hilserl_train_config.json
+uv run python -m lerobot.scripts.rl.learner --config_path configs/reach_grasp_hilserl_train_config.json
 ```
 
 **Terminal 2 (Actor):**
 ```bash
-uv run python -m lerobot.scripts.rl.actor --config configs/reach_grasp_hilserl_train_config.json
+uv run python -m lerobot.scripts.rl.actor --config_path configs/reach_grasp_hilserl_train_config.json
 ```
 
 ### Train with DrQ-v2
