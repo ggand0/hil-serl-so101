@@ -6,7 +6,7 @@
     "mode": "record",
     "repo_id": "gtgando/so101_reach_grasp_cube_reward_v1",
     "dataset_root": null,
-    "num_episodes": 3,
+    "num_episodes": 20,
     "episode": 0,
     "device": "cuda",
     "push_to_hub": true,
