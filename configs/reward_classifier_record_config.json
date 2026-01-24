@@ -15,7 +15,7 @@
     "features": {
         "observation.images.gripper_cam": {
             "type": "VISUAL",
-            "shape": [3, 84, 84]
+            "shape": [3, 480, 640]
         },
         "observation.state": {
             "type": "STATE",
@@ -76,7 +76,7 @@
         "use_radians": true,
         "normalize_images": false,
         "crop_params_dict": null,
-        "resize_size": [84, 84],
+        "resize_size": null,
         "control_time_s": 30.0,
         "fixed_reset_joint_positions": [-0.4, -104.84, 97.05, 44.09, 89.45, 4.35],
         "reset_time_s": 2.0,

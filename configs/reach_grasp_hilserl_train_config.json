@@ -87,7 +87,7 @@
         "utd_ratio": 2,
         "state_encoder_hidden_dim": 256,
         "latent_dim": 256,
-        "target_entropy": null,
+        "target_entropy": -2.0,
         "use_backup_entropy": true,
         "grad_clip_norm": 40.0,
         "use_torch_compile": false,
