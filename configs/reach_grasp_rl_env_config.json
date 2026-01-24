@@ -49,8 +49,8 @@
         "end_effector_site": "gripperframe",
         "ik_damping": 0.1,
         "ik_max_dq": 0.5,
-        "locked_joints": [3, 4],
-        "locked_joint_positions": {"3": 90.0, "4": 90.0},
+        "locked_joints": [],
+        "locked_joint_positions": {},
         "end_effector_bounds": {
             "min": [0.15, -0.15, 0.02],
             "max": [0.35, 0.15, 0.25]

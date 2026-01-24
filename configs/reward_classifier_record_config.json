@@ -11,7 +11,7 @@
     "device": "cuda",
     "push_to_hub": true,
     "number_of_steps_after_success": 30,
-    "reward_classifier_pretrained_path": "/home/gota/ggando/ml/so101-playground/outputs/reward_classifier_reach_grasp/checkpoints/002000/pretrained_model",
+    "reward_classifier_pretrained_path": null,
     "features": {
         "observation.images.gripper_cam": {
             "type": "VISUAL",
@@ -50,8 +50,8 @@
         "end_effector_site": "gripperframe",
         "ik_damping": 0.1,
         "ik_max_dq": 0.5,
-        "locked_joints": [3, 4],
-        "locked_joint_positions": {"3": 90.0, "4": 90.0},
+        "locked_joints": [],
+        "locked_joint_positions": {},
         "end_effector_bounds": {
             "min": [0.15, -0.15, 0.02],
             "max": [0.35, 0.15, 0.25]
@@ -77,9 +77,9 @@
         "normalize_images": false,
         "crop_params_dict": null,
         "resize_size": null,
-        "control_time_s": 30.0,
+        "control_time_s": 15.0,
         "fixed_reset_joint_positions": [-0.4, -104.84, 97.05, 44.09, 89.45, 4.35],
-        "reset_time_s": 2.0,
+        "reset_time_s": 5.0,
         "use_ik_reset": false,
         "use_gripper": true,
         "gripper_quantization_threshold": 0.8,

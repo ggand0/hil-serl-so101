@@ -9,7 +9,7 @@
         "hidden_dim": 256,
         "latent_dim": 256,
         "image_embedding_pooling_dim": 8,
-        "dropout_rate": 0.1,
+        "dropout_rate": 0.2,
         "learning_rate": 1e-4,
         "weight_decay": 0.01,
         "grad_clip_norm": 1.0,
@@ -19,7 +19,7 @@
         "input_features": {
             "observation.images.gripper_cam": {
                 "type": "VISUAL",
-                "shape": [3, 84, 84]
+                "shape": [3, 128, 128]
             }
         },
         "output_features": {
@@ -30,8 +30,8 @@
         }
     },
     "dataset": {
-        "repo_id": "gtgando/so101_reach_grasp_cube_reward",
-        "root": "/home/gota/.cache/huggingface/lerobot/gtgando/so101_reach_grasp_cube_reward",
+        "repo_id": "gtgando/so101_reach_grasp_cube_reward_v1",
+        "root": "/home/gota/.cache/huggingface/lerobot/gtgando/so101_reach_grasp_cube_reward_v1",
         "episodes": null,
         "image_transforms": {
             "enable": true,
@@ -72,13 +72,13 @@
         "use_imagenet_stats": false,
         "video_backend": "pyav"
     },
-    "output_dir": "/home/gota/ggando/ml/so101-playground/outputs/reward_classifier_reach_grasp",
+    "output_dir": "/home/gota/ggando/ml/so101-playground/outputs/reward_classifier_reach_grasp_v2",
     "job_name": "reward_classifier_reach_grasp",
     "resume": false,
     "seed": 1000,
     "num_workers": 4,
     "batch_size": 32,
-    "steps": 2000,
+    "steps": 3000,
     "eval_freq": 500,
     "log_freq": 50,
     "save_checkpoint": true,
