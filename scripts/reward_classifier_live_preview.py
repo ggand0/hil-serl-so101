@@ -44,6 +44,12 @@ def main():
         default=128,
         help="Input image size for classifier",
     )
+    parser.add_argument(
+        "--record",
+        type=str,
+        default=None,
+        help="Output video file path (e.g., output.mp4)",
+    )
     args = parser.parse_args()
 
     # Load model
@@ -52,9 +58,16 @@ def main():
     config.pretrained_path = args.model_path
 
     # Load dataset metadata for normalization stats
+    dataset_root = Path(args.dataset_path)
+    # Read repo_id from meta/info.json
+    import json
+    info_path = dataset_root / "meta" / "info.json"
+    with open(info_path) as f:
+        info = json.load(f)
+    repo_id = info.get("repo_id", dataset_root.name)
     ds_meta = LeRobotDatasetMetadata(
-        repo_id="gtgando/so101_reach_grasp_cube_reward",
-        root=Path(args.dataset_path),
+        repo_id=repo_id,
+        root=dataset_root,
     )
 
     # Create policy
@@ -83,8 +96,18 @@ def main():
     print("Press 'q' to quit")
     print("Press 't' to adjust threshold (+0.1)")
     print("Press 'r' to reset threshold to 0.5")
+    print("Press 'v' to toggle recording")
 
     threshold = args.threshold
+
+    # Video recording setup
+    video_writer = None
+    recording = False
+    if args.record:
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        video_writer = cv2.VideoWriter(args.record, fourcc, 30.0, (640, 480))
+        recording = True
+        print(f"Recording to {args.record}")
 
     while True:
         ret, frame = cap.read()
@@ -93,8 +116,13 @@ def main():
             break
 
         # Preprocess frame for classifier
+        # Center crop 640x480 -> 480x480
+        h, w = frame.shape[:2]
+        crop_x = (w - 480) // 2
+        cropped = frame[:, crop_x:crop_x+480]
+
         # Convert BGR to RGB
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb_frame = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
 
         # Resize to model input size
         resized = cv2.resize(rgb_frame, (args.image_size, args.image_size))
@@ -191,6 +219,15 @@ def main():
             1,
         )
 
+        # Recording indicator
+        if recording:
+            cv2.circle(frame, (620, 20), 10, (0, 0, 255), -1)
+            cv2.putText(frame, "REC", (580, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+        # Write frame to video
+        if recording and video_writer is not None:
+            video_writer.write(frame)
+
         # Display frame
         cv2.imshow("Reward Classifier Live Preview", frame)
 
@@ -204,8 +241,22 @@ def main():
         elif key == ord("r"):
             threshold = 0.5
             print(f"Threshold reset to {threshold:.2f}")
+        elif key == ord("v"):
+            if video_writer is None:
+                # Start recording
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                record_path = args.record or f"recording_{int(cv2.getTickCount())}.mp4"
+                video_writer = cv2.VideoWriter(record_path, fourcc, 30.0, (640, 480))
+                recording = True
+                print(f"Started recording to {record_path}")
+            else:
+                recording = not recording
+                print(f"Recording: {'ON' if recording else 'PAUSED'}")
 
     cap.release()
+    if video_writer is not None:
+        video_writer.release()
+        print("Video saved")
     cv2.destroyAllWindows()
 
 

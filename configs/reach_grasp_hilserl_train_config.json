@@ -1,7 +1,7 @@
 {
-    "output_dir": "/home/gota/ggando/ml/so101-playground/outputs/hilserl_reach_grasp_v2",
+    "output_dir": "/home/gota/ggando/ml/so101-playground/outputs/hilserl_reach_grasp_v3",
     "job_name": "hilserl_reach_grasp",
-    "resume": true,
+    "resume": false,
     "seed": 1000,
     "num_workers": 4,
     "batch_size": 256,
@@ -15,8 +15,8 @@
         "disable_artifact": true
     },
     "dataset": {
-        "repo_id": "gtgando/so101_reach_grasp_cube_reward",
-        "root": "/home/gota/.cache/huggingface/lerobot/gtgando/so101_reach_grasp_cube_reward",
+        "repo_id": "gtgando/so101_reach_grasp_cube_reward_merged",
+        "root": "/home/gota/.cache/huggingface/lerobot/gtgando/so101_reach_grasp_cube_reward_merged",
         "use_imagenet_stats": false,
         "video_backend": "pyav"
     },
@@ -128,7 +128,7 @@
         "episode": 0,
         "device": "cuda",
         "push_to_hub": false,
-        "reward_classifier_pretrained_path": "/home/gota/ggando/ml/so101-playground/outputs/reward_classifier_reach_grasp/checkpoints/002000/pretrained_model",
+        "reward_classifier_pretrained_path": "/home/gota/ggando/ml/so101-playground/outputs/reward_classifier_reach_grasp_v3/checkpoints/003000/pretrained_model",
         "features": {
             "observation.images.gripper_cam": {
                 "type": "VISUAL",
@@ -197,7 +197,9 @@
             "add_full_proprioception": true,
             "use_radians": true,
             "normalize_images": false,
-            "crop_params_dict": null,
+            "crop_params_dict": {
+                "observation.images.gripper_cam": [0, 80, 480, 480]
+            },
             "resize_size": [128, 128],
             "control_time_s": 30.0,
             "fixed_reset_joint_positions": [-0.4, -95.0, 90.0, 90.0, 89.45, 4.35],
