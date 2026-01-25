@@ -30,8 +30,8 @@
         }
     },
     "dataset": {
-        "repo_id": "gtgando/so101_reach_grasp_cube_reward_merged",
-        "root": "/home/gota/.cache/huggingface/lerobot/gtgando/so101_reach_grasp_cube_reward_merged",
+        "repo_id": "gtgando/so101_reach_grasp_cube_reward_v3_128",
+        "root": "/home/gota/.cache/huggingface/lerobot/gtgando/so101_reach_grasp_cube_reward_v3_128",
         "episodes": null,
         "image_transforms": {
             "enable": true,

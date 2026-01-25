@@ -15,8 +15,8 @@
         "disable_artifact": true
     },
     "dataset": {
-        "repo_id": "gtgando/so101_reach_grasp_cube_reward_merged",
-        "root": "/home/gota/.cache/huggingface/lerobot/gtgando/so101_reach_grasp_cube_reward_merged",
+        "repo_id": "gtgando/so101_reach_grasp_cube_reward_v3",
+        "root": "/home/gota/.cache/huggingface/lerobot/gtgando/so101_reach_grasp_cube_reward_v3",
         "use_imagenet_stats": false,
         "video_backend": "pyav"
     },
