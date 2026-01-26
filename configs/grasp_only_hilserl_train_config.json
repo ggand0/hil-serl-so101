@@ -89,6 +89,8 @@
         "latent_dim": 256,
         "target_entropy": -2.0,
         "use_backup_entropy": false,
+        "use_augmentation": true,
+        "augmentation_pad": 4,
         "grad_clip_norm": 40.0,
         "use_torch_compile": false,
         "critic_network_kwargs": {
