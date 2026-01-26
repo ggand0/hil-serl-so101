@@ -1,0 +1,219 @@
+{
+    "output_dir": "/home/gota/ggando/ml/so101-playground/outputs/hilserl_grasp_only",
+    "job_name": "hilserl_grasp_only",
+    "resume": true,
+    "seed": 1000,
+    "num_workers": 4,
+    "batch_size": 256,
+    "steps": 100000,
+    "log_freq": 100,
+    "save_checkpoint": true,
+    "save_freq": 1000,
+    "wandb": {
+        "enable": false,
+        "project": "so101-hilserl-grasp-only",
+        "disable_artifact": true
+    },
+    "dataset": {
+        "repo_id": "gtgando/so101_reach_grasp_cube_reward_v3",
+        "root": "/home/gota/.cache/huggingface/lerobot/gtgando/so101_reach_grasp_cube_reward_v3",
+        "use_imagenet_stats": false,
+        "video_backend": "pyav"
+    },
+    "policy": {
+        "type": "sac",
+        "n_obs_steps": 1,
+        "push_to_hub": false,
+        "normalization_mapping": {
+            "VISUAL": "MEAN_STD",
+            "STATE": "MIN_MAX",
+            "ENV": "MIN_MAX",
+            "ACTION": "MIN_MAX"
+        },
+        "input_features": {
+            "observation.images.gripper_cam": {
+                "type": "VISUAL",
+                "shape": [3, 128, 128]
+            },
+            "observation.state": {
+                "type": "STATE",
+                "shape": [18]
+            }
+        },
+        "output_features": {
+            "action": {
+                "type": "ACTION",
+                "shape": [4]
+            }
+        },
+        "device": "cuda",
+        "storage_device": "cuda",
+        "use_amp": false,
+        "dataset_stats": {
+            "observation.images.gripper_cam": {
+                "mean": [0.485, 0.456, 0.406],
+                "std": [0.229, 0.224, 0.225]
+            },
+            "observation.state": {
+                "min": [-0.5, -2.0, -1.0, 0.5, 1.5, 0.0, -2.5, -2.0, -3.5, -0.5, -0.5, -2.0, 0.35, -0.01, 0.2, 0.0, 0.0, 0.0],
+                "max": [0.6, 1.5, 2.0, 2.0, 1.6, 1.0, 2.0, 5.0, 2.5, 3.5, 0.5, 2.0, 0.45, 0.01, 0.25, 0.1, 0.0, 0.0]
+            },
+            "action": {
+                "min": [-1.0, -1.0, -1.0, 0.0],
+                "max": [1.0, 1.0, 1.0, 1.0]
+            }
+        },
+        "num_discrete_actions": null,
+        "vision_encoder_name": "helper2424/resnet10",
+        "freeze_vision_encoder": true,
+        "image_encoder_hidden_dim": 32,
+        "image_embedding_pooling_dim": 8,
+        "shared_encoder": true,
+        "online_steps": 100000,
+        "online_env_seed": 10000,
+        "online_buffer_capacity": 30000,
+        "offline_buffer_capacity": 5000,
+        "online_step_before_learning": 100,
+        "policy_update_freq": 1,
+        "discount": 0.97,
+        "async_prefetch": false,
+        "temperature_init": 0.01,
+        "num_critics": 2,
+        "num_subsample_critics": null,
+        "critic_lr": 0.0003,
+        "actor_lr": 0.0003,
+        "temperature_lr": 0.0003,
+        "critic_target_update_weight": 0.005,
+        "utd_ratio": 20,
+        "state_encoder_hidden_dim": 256,
+        "latent_dim": 256,
+        "target_entropy": -2.0,
+        "use_backup_entropy": true,
+        "grad_clip_norm": 40.0,
+        "use_torch_compile": false,
+        "critic_network_kwargs": {
+            "hidden_dims": [256, 256],
+            "activate_final": true,
+            "final_activation": null
+        },
+        "actor_network_kwargs": {
+            "hidden_dims": [256, 256],
+            "activate_final": true
+        },
+        "policy_kwargs": {
+            "use_tanh_squash": true,
+            "std_min": -5,
+            "std_max": 2,
+            "init_final": 0.05
+        },
+        "actor_learner_config": {
+            "learner_host": "127.0.0.1",
+            "learner_port": 50051,
+            "policy_parameters_push_frequency": 2
+        },
+        "concurrency": {
+            "actor": "threads",
+            "learner": "threads"
+        }
+    },
+    "env": {
+        "type": "gym_manipulator",
+        "name": "real_robot",
+        "task": "grasp_only",
+        "fps": 10,
+        "mode": null,
+        "repo_id": null,
+        "dataset_root": null,
+        "num_episodes": 1000,
+        "episode": 0,
+        "device": "cuda",
+        "push_to_hub": false,
+        "reward_classifier_pretrained_path": "/home/gota/ggando/ml/so101-playground/outputs/reward_classifier_reach_grasp_v3/checkpoints/003000/pretrained_model",
+        "features": {
+            "observation.images.gripper_cam": {
+                "type": "VISUAL",
+                "shape": [3, 128, 128]
+            },
+            "observation.state": {
+                "type": "STATE",
+                "shape": [18]
+            },
+            "action": {
+                "type": "ACTION",
+                "shape": [4]
+            }
+        },
+        "features_map": {
+            "observation.images.gripper_cam": "observation.images.gripper_cam",
+            "observation.state": "observation.state",
+            "action": "action"
+        },
+        "robot": {
+            "type": "so101_follower_end_effector",
+            "id": "ggando_so101_follower",
+            "calibration_dir": "/home/gota/.cache/huggingface/lerobot/calibration/robots/so101_follower",
+            "port": "/dev/ttyACM0",
+            "disable_torque_on_disconnect": true,
+            "max_relative_target": null,
+            "cameras": {
+                "gripper_cam": {
+                    "type": "opencv",
+                    "fps": 30,
+                    "width": 640,
+                    "height": 480,
+                    "index_or_path": "/dev/video0",
+                    "color_mode": "rgb",
+                    "rotation": 0,
+                    "warmup_s": 1
+                }
+            },
+            "use_degrees": true,
+            "mujoco_model_path": "/home/gota/ggando/ml/pick-101/models/so101/lift_cube.xml",
+            "end_effector_site": "gripperframe",
+            "ik_damping": 0.1,
+            "ik_max_dq": 0.5,
+            "locked_joints": [],
+            "locked_joint_positions": {},
+            "end_effector_bounds": {
+                "min": [0.10, -0.15, -0.02],
+                "max": [0.35, 0.15, 0.25]
+            },
+            "max_gripper_pos": 50.0,
+            "action_scale": 0.02
+        },
+        "teleop": {
+            "type": "so101_leader",
+            "id": "ggando_so101_leader",
+            "calibration_dir": "/home/gota/.cache/huggingface/lerobot/calibration/teleoperators/so101_leader",
+            "port": "/dev/ttyACM1",
+            "use_degrees": true
+        },
+        "wrapper": {
+            "control_mode": "leader",
+            "display_cameras": false,
+            "add_joint_velocity_to_observation": false,
+            "add_current_to_observation": false,
+            "add_ee_pose_to_observation": false,
+            "add_full_proprioception": true,
+            "use_radians": true,
+            "normalize_images": false,
+            "crop_params_dict": {
+                "observation.images.gripper_cam": [0, 80, 480, 480]
+            },
+            "resize_size": [128, 128],
+            "control_time_s": 5.0,
+            "fixed_reset_joint_positions": null,
+            "reset_time_s": 2.0,
+            "use_ik_reset": true,
+            "ik_reset_ee_pos": [0.25, 0.0, 0.05],
+            "random_ee_reset": true,
+            "random_ee_range_xy": 0.03,
+            "random_ee_range_z": 0.02,
+            "use_gripper": true,
+            "gripper_quantization_threshold": 0.8,
+            "gripper_penalty": 0.0,
+            "gripper_penalty_in_reward": false,
+            "display_reward_preview": true
+        }
+    }
+}
