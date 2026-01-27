@@ -1,0 +1,15 @@
+{
+    "dataset_path": "/home/gota/.cache/huggingface/lerobot/gtgando/so101_grasp_only_negative_v1",
+    "episodes": {
+        "0": null,
+        "1": null,
+        "2": {"success_start": 81},
+        "3": null,
+        "4": null,
+        "5": null,
+        "6": null,
+        "7": {"success_start": 45},
+        "8": {"success_start": 52},
+        "9": {"ranges": [[56, 58], [61, 63], [66, null]]}
+    }
+}

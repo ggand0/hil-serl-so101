@@ -1,0 +1,10 @@
+{
+    "dataset_path": "/home/gota/ggando/ml/so101-playground/data/grasp_only_reward_daytime_negative",
+    "episodes": {
+        "0": null,
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": {"ranges": [[41, 43]]}
+    }
+}

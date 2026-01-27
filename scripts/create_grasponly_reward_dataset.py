@@ -1,229 +1,169 @@
 #!/usr/bin/env python3
-"""Create a labeled reward classifier dataset from annotations.
-
-Uses the annotation file format:
-  00: 34-         # frames 34+ are success
-  01: 40-48, 60-  # frames 40-48 and 60+ are success
-  02: all fail    # all frames are failure
-
-Frame numbers in annotations are 1-indexed (as seen in extracted frame files).
-Parquet frame_index is 0-indexed, so we subtract 1.
-"""
+"""Create labeled reward classifier dataset from JSON configs."""
 import json
-import re
 import shutil
 from pathlib import Path
 
+import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-
-def parse_annotation_file(filepath: str) -> dict:
-    """Parse annotation file and return dict of {dataset_path: {episode: [(start, end), ...]}}"""
-    datasets = {}
-    current_dataset = None
-
-    with open(filepath, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                # Check if it's a dataset path comment
-                if '/.cache/huggingface/lerobot/' in line:
-                    # Extract actual path from comment
-                    path_match = re.search(r'(/home/[^\s]+)', line)
-                    if path_match:
-                        current_dataset = path_match.group(1)
-                        datasets[current_dataset] = {}
-                continue
-
-            # Parse episode annotation: "00: 34-" or "01: 40-48, 60-"
-            match = re.match(r'^(\d+):\s*(.+)$', line)
-            if match and current_dataset:
-                ep_num = int(match.group(1))
-                annotation = match.group(2).strip()
-
-                if annotation.lower() == 'all fail':
-                    datasets[current_dataset][ep_num] = []  # Empty list = all fail
-                else:
-                    # Parse ranges like "34-" or "40-48, 60-"
-                    ranges = []
-                    for part in annotation.split(','):
-                        part = part.strip()
-                        range_match = re.match(r'^(\d+)-(\d+)?$', part)
-                        if range_match:
-                            start = int(range_match.group(1))
-                            end = int(range_match.group(2)) if range_match.group(2) else None
-                            ranges.append((start, end))
-                    datasets[current_dataset][ep_num] = ranges
-
-    return datasets
+LABELS_DIR = Path("/home/gota/ggando/ml/so101-playground/data/labels")
+CACHE_DIR = Path("/home/gota/.cache/huggingface/lerobot/gtgando")
 
 
-def is_success_frame(frame_idx_0based: int, ranges: list, total_frames: int) -> bool:
-    """Check if frame is in success range. frame_idx is 0-based, ranges are 1-based."""
-    if not ranges:
+def load_config(config_name: str) -> dict:
+    config_path = LABELS_DIR / f"{config_name}.json"
+    with open(config_path) as f:
+        return json.load(f)
+
+
+def is_success_frame(frame_idx: int, labels: dict, total_frames: int) -> bool:
+    """Check if frame is success. Frame indices are 0-based in parquet."""
+    if labels is None:
         return False
 
-    frame_1based = frame_idx_0based + 1  # Convert to 1-indexed for comparison
+    if "success_start" in labels:
+        return frame_idx >= labels["success_start"]
 
-    for start, end in ranges:
-        actual_end = end if end is not None else total_frames
-        if start <= frame_1based <= actual_end:
-            return True
+    if "ranges" in labels:
+        for start, end in labels["ranges"]:
+            actual_end = end if end is not None else total_frames
+            if start <= frame_idx <= actual_end:
+                return True
+        return False
+
     return False
 
 
-def create_reward_classifier_dataset(
-    annotation_file: str,
-    output_root: Path,
-    repo_id: str = "gtgando/so101_grasp_only_reward_v1",
-):
-    """Create a reward classifier dataset combining both positive and negative samples."""
+def create_reward_dataset(config_name: str = "reward_v1"):
+    config = load_config(config_name)
+    repo_id = config["output_repo_id"]
+    output_root = CACHE_DIR / repo_id.split("/")[-1]
 
-    # Parse annotations
-    datasets = parse_annotation_file(annotation_file)
-    print(f"Parsed {len(datasets)} datasets from annotations")
-    for ds_path, episodes in datasets.items():
-        print(f"  {ds_path}: {len(episodes)} episodes")
+    # Load all source configs
+    sources = []
+    for source_name in config["sources"]:
+        source_config = load_config(source_name)
+        sources.append(source_config)
 
-    # Prepare output directory
+    print(f"Config: {config_name}")
+    print(f"Output: {output_root}")
+    print(f"Sources: {config['sources']}")
+
+    # Prepare output
     if output_root.exists():
-        print(f"Removing existing output: {output_root}")
         shutil.rmtree(output_root)
     output_root.mkdir(parents=True)
 
-    # Collect all data
-    all_data = []
-    all_videos = []
+    data_dir = output_root / "data" / "chunk-000"
+    data_dir.mkdir(parents=True)
+    video_dir = output_root / "videos" / "chunk-000" / "observation.images.gripper_cam"
+    video_dir.mkdir(parents=True)
+    meta_dir = output_root / "meta"
+    meta_dir.mkdir(parents=True)
+
+    # Process all sources
+    all_frames = []
     episode_infos = []
-    episode_counter = 0
+    new_ep_idx = 0
     global_index = 0
 
-    for ds_path, annotations in datasets.items():
-        ds_root = Path(ds_path)
-        print(f"\nProcessing: {ds_root}")
+    for source in sources:
+        ds_path = Path(source["dataset_path"])
+        episodes = source["episodes"]
 
-        # Read episodes.jsonl to get frame counts
-        episodes_file = ds_root / "meta" / "episodes.jsonl"
-        episode_lengths = {}
-        with open(episodes_file, 'r') as f:
-            for line in f:
-                ep_info = json.loads(line)
-                episode_lengths[ep_info["episode_index"]] = ep_info["length"]
+        print(f"\nSource: {ds_path.name}")
 
-        for ep_num, ranges in annotations.items():
-            # Read parquet for this episode
-            pq_path = ds_root / "data" / "chunk-000" / f"episode_{ep_num:06d}.parquet"
+        for ep_str, labels in episodes.items():
+            ep_num = int(ep_str)
+            pq_path = ds_path / "data" / "chunk-000" / f"episode_{ep_num:06d}.parquet"
+
             if not pq_path.exists():
-                print(f"  Warning: {pq_path} not found, skipping")
+                print(f"  ep{ep_num}: NOT FOUND, skipping")
                 continue
 
             table = pq.read_table(pq_path)
             df = table.to_pandas()
-            total_frames = len(df)
+            num_frames = len(df)
 
-            # Label frames based on annotations
+            # Apply labels
+            exclude = labels.get("exclude", []) if labels else []
             success_count = 0
-            for i in range(total_frames):
-                is_success = is_success_frame(i, ranges, total_frames)
-                df.at[i, "next.reward"] = 1.0 if is_success else 0.0
-                if is_success:
+            for i in range(num_frames):
+                if i in exclude:
+                    df.at[i, "next.reward"] = 0.0
+                elif is_success_frame(i, labels, num_frames):
+                    df.at[i, "next.reward"] = 1.0
                     success_count += 1
+                else:
+                    df.at[i, "next.reward"] = 0.0
 
-            # Update episode index and global index
-            df["episode_index"] = episode_counter
-            df["index"] = range(global_index, global_index + total_frames)
+            # Update indices
+            df["episode_index"] = new_ep_idx
+            df["index"] = range(global_index, global_index + num_frames)
+            df["frame_index"] = range(num_frames)
+            df["task_index"] = 0
 
-            # Reset frame_index to 0-based within episode
-            df["frame_index"] = range(total_frames)
+            # Write parquet
+            out_pq = data_dir / f"episode_{new_ep_idx:06d}.parquet"
+            new_table = pa.Table.from_pandas(df, preserve_index=False)
+            pq.write_table(new_table, out_pq)
 
-            all_data.append(df)
+            # Copy video
+            video_src = ds_path / "videos" / "chunk-000" / "observation.images.gripper_cam" / f"episode_{ep_num:06d}.mp4"
+            video_dst = video_dir / f"episode_{new_ep_idx:06d}.mp4"
+            if video_src.exists():
+                shutil.copy2(video_src, video_dst)
 
-            # Track video path
-            video_src = ds_root / "videos" / "chunk-000" / "observation.images.gripper_cam" / f"episode_{ep_num:06d}.mp4"
-            all_videos.append((video_src, episode_counter))
-
-            # Episode info
             episode_infos.append({
-                "episode_index": episode_counter,
+                "episode_index": new_ep_idx,
                 "tasks": ["grasp_only"],
-                "length": total_frames,
+                "length": num_frames,
             })
 
-            print(f"  Episode {ep_num} -> {episode_counter}: {total_frames} frames, {success_count} success ({100*success_count/total_frames:.1f}%)")
+            all_frames.append(df)
+            print(f"  ep{ep_num} -> {new_ep_idx}: {num_frames} frames, {success_count} success")
 
-            episode_counter += 1
-            global_index += total_frames
+            new_ep_idx += 1
+            global_index += num_frames
 
-    # Combine all data
-    import pandas as pd
-    combined_df = pd.concat(all_data, ignore_index=True)
+    combined_df = pd.concat(all_frames, ignore_index=True)
+    total_success = (combined_df["next.reward"] == 1.0).sum()
+    total_fail = (combined_df["next.reward"] == 0.0).sum()
 
-    print(f"\n=== Combined Dataset ===")
-    print(f"Total episodes: {episode_counter}")
-    print(f"Total frames: {len(combined_df)}")
-    success_total = (combined_df["next.reward"] == 1.0).sum()
-    print(f"Success frames: {success_total} ({100*success_total/len(combined_df):.1f}%)")
-
-    # Create output structure
-    data_dir = output_root / "data" / "chunk-000"
-    data_dir.mkdir(parents=True)
-
-    video_dir = output_root / "videos" / "chunk-000" / "observation.images.gripper_cam"
-    video_dir.mkdir(parents=True)
-
-    meta_dir = output_root / "meta"
-    meta_dir.mkdir(parents=True)
-
-    # Write parquet files per episode
-    for ep_idx in range(episode_counter):
-        ep_df = combined_df[combined_df["episode_index"] == ep_idx].copy()
-        out_pq = data_dir / f"episode_{ep_idx:06d}.parquet"
-        table = pa.Table.from_pandas(ep_df, preserve_index=False)
-        pq.write_table(table, out_pq)
-
-    # Copy videos
-    print("\nCopying videos...")
-    for video_src, ep_idx in all_videos:
-        video_dst = video_dir / f"episode_{ep_idx:06d}.mp4"
-        shutil.copy2(video_src, video_dst)
-
-    # Write episodes.jsonl
+    # Write metadata
     with open(meta_dir / "episodes.jsonl", 'w') as f:
         for ep_info in episode_infos:
             f.write(json.dumps(ep_info) + "\n")
 
-    # Write tasks.jsonl
     with open(meta_dir / "tasks.jsonl", 'w') as f:
         f.write(json.dumps({"task_index": 0, "task": "grasp_only"}) + "\n")
 
-    # Read source info.json and update
-    source_info_path = list(datasets.keys())[0]
-    with open(Path(source_info_path) / "meta" / "info.json", 'r') as f:
+    first_source_path = Path(sources[0]["dataset_path"])
+    with open(first_source_path / "meta" / "info.json") as f:
         info = json.load(f)
 
-    info["total_episodes"] = episode_counter
+    info["repo_id"] = repo_id
+    info["total_episodes"] = new_ep_idx
     info["total_frames"] = len(combined_df)
-    info["total_videos"] = episode_counter
-    info["splits"] = {"train": f"0:{episode_counter}"}
+    info["total_videos"] = new_ep_idx
+    info["splits"] = {"train": f"0:{new_ep_idx}"}
 
     with open(meta_dir / "info.json", 'w') as f:
         json.dump(info, f, indent=4)
 
-    print(f"\nOutput saved to: {output_root}")
-    print(f"Repo ID: {repo_id}")
-
-    return output_root
+    print(f"\n=== Summary ===")
+    print(f"Episodes: {new_ep_idx}")
+    print(f"Frames: {len(combined_df)}")
+    print(f"Success: {total_success} ({100*total_success/len(combined_df):.1f}%)")
+    print(f"Fail: {total_fail} ({100*total_fail/len(combined_df):.1f}%)")
+    print(f"Saved to: {output_root}")
 
 
 if __name__ == "__main__":
-    cache_dir = Path("/home/gota/.cache/huggingface/lerobot/gtgando")
-
-    annotation_file = "/home/gota/ggando/ml/so101-playground/data/reward_classifier_grasponly_v1.txt"
-    output = cache_dir / "so101_grasp_only_reward_v1"
-
-    create_reward_classifier_dataset(
-        annotation_file=annotation_file,
-        output_root=output,
-        repo_id="gtgando/so101_grasp_only_reward_v1",
-    )
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="reward_v1", help="Config name in data/labels/")
+    args = parser.parse_args()
+    create_reward_dataset(args.config)
