@@ -276,8 +276,10 @@ uv run python -m lerobot.scripts.rl.gym_manipulator --config_path configs/reward
 ### Train Reward Classifier
 
 ```bash
-uv run python -m lerobot.scripts.train --config_path configs/reward_classifier_train_config.json
+uv run python scripts/train_reward_classifier.py --config configs/reward_classifier_grasponly_v4_train_config.json
 ```
+
+Uses custom training script with frame-level train/val split, early stopping, and best model selection.
 
 ### Live Reward Classifier Preview
 

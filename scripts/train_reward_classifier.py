@@ -5,7 +5,11 @@ import json
 import logging
 import random
 import shutil
+import warnings
 from pathlib import Path
+
+# Suppress torchvision video deprecation warning
+warnings.filterwarnings("ignore", message=".*video decoding and encoding capabilities.*")
 
 import numpy as np
 import torch
@@ -55,37 +59,32 @@ def make_image_transforms(cfg_dict: dict | None) -> ImageTransforms | None:
 
 
 def create_train_val_split(dataset, val_ratio: float = 0.15, seed: int = 42):
-    """Split dataset by episodes to avoid data leakage."""
-    # Get unique episodes
-    episode_indices = dataset.episode_data_index
-    num_episodes = len(episode_indices["from"])
+    """Random frame-level split for classifier training."""
+    num_frames = len(dataset)
+    indices = list(range(num_frames))
 
-    # Shuffle episodes
-    episode_ids = list(range(num_episodes))
     random.seed(seed)
-    random.shuffle(episode_ids)
+    random.shuffle(indices)
 
-    # Split
-    num_val = max(1, int(num_episodes * val_ratio))
-    val_episode_ids = set(episode_ids[:num_val])
-    train_episode_ids = set(episode_ids[num_val:])
+    num_val = max(1, int(num_frames * val_ratio))
+    val_indices = indices[:num_val]
+    train_indices = indices[num_val:]
 
-    # Get frame indices for each split
-    train_indices = []
-    val_indices = []
+    # Log episode distribution
+    episode_data_index = dataset.episode_data_index
+    num_episodes = len(episode_data_index["from"])
 
-    for ep_id in range(num_episodes):
-        start = episode_indices["from"][ep_id].item()
-        end = episode_indices["to"][ep_id].item()
-        indices = list(range(start, end))
+    def get_episode(idx):
+        for ep in range(num_episodes):
+            if episode_data_index["from"][ep] <= idx < episode_data_index["to"][ep]:
+                return ep
+        return -1
 
-        if ep_id in val_episode_ids:
-            val_indices.extend(indices)
-        else:
-            train_indices.extend(indices)
+    val_episodes = set(get_episode(i) for i in val_indices)
+    train_episodes = set(get_episode(i) for i in train_indices)
 
-    logger.info(f"Train/Val split: {len(train_episode_ids)} train episodes ({len(train_indices)} frames), "
-                f"{len(val_episode_ids)} val episodes ({len(val_indices)} frames)")
+    logger.info(f"Train/Val split: {len(train_indices)} train frames, {len(val_indices)} val frames")
+    logger.info(f"Val covers {len(val_episodes)}/{num_episodes} episodes, Train covers {len(train_episodes)}/{num_episodes} episodes")
 
     return train_indices, val_indices
 
@@ -146,6 +145,12 @@ def train(
 
     # Train/val split
     train_indices, val_indices = create_train_val_split(dataset, val_ratio=val_ratio)
+
+    # Save val indices for inspection
+    val_indices_file = output_dir / "val_indices.json"
+    with open(val_indices_file, "w") as f:
+        json.dump({"val_indices": val_indices, "train_indices": train_indices}, f)
+    logger.info(f"Saved train/val indices to {val_indices_file}")
 
     train_dataset = Subset(dataset, train_indices)
     val_dataset = Subset(dataset, val_indices)
@@ -226,6 +231,7 @@ def train(
     best_val_loss = float('inf')
     best_val_acc = 0.0
     best_step = 0
+    best_epoch = 0
     patience_counter = 0
 
     logger.info(f"Training for max {max_steps} steps with early stopping (patience={patience})")
@@ -237,7 +243,12 @@ def train(
 
     while step < max_steps:
         epoch += 1
-        for batch in train_loader:
+        epoch_loss = 0.0
+        epoch_correct = 0
+        epoch_total = 0
+
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch}", leave=False)
+        for batch in pbar:
             if step >= max_steps:
                 break
 
@@ -253,53 +264,64 @@ def train(
             optimizer.step()
             step += 1
 
-            # Logging
-            if step % log_freq == 0:
-                logger.info(f"step:{step} epoch:{epoch} loss:{loss.item():.4f} acc:{metrics['accuracy']:.1f}%")
+            # Accumulate epoch stats
+            bs = batch["next.reward"].size(0)
+            epoch_loss += loss.item() * bs
+            epoch_correct += metrics["correct"]
+            epoch_total += bs
 
-            # Validation
-            if step % eval_freq == 0:
-                val_loss, val_acc = evaluate(model, val_loader, device)
-                logger.info(f"  [VAL] step:{step} loss:{val_loss:.4f} acc:{val_acc:.1f}%")
-
-                # Best model selection
-                if val_loss < best_val_loss - min_delta:
-                    best_val_loss = val_loss
-                    best_val_acc = val_acc
-                    best_step = step
-                    patience_counter = 0
-
-                    # Save best model
-                    best_dir = output_dir / "best_model"
-                    if best_dir.exists():
-                        shutil.rmtree(best_dir)
-                    best_dir.mkdir(parents=True)
-                    model.save_pretrained(best_dir)
-                    logger.info(f"  [BEST] New best model saved at step {step} (val_loss={val_loss:.4f}, val_acc={val_acc:.1f}%)")
-                else:
-                    patience_counter += 1
-                    logger.info(f"  [PATIENCE] {patience_counter}/{patience} (best was step {best_step})")
-
-                # Early stopping
-                if patience_counter >= patience:
-                    logger.info(f"Early stopping triggered at step {step}")
-                    break
+            # Update progress bar
+            pbar.set_postfix(loss=f"{loss.item():.4f}", acc=f"{metrics['accuracy']:.1f}%")
 
             # Periodic checkpoint
             if step % save_freq == 0:
                 ckpt_dir = output_dir / "checkpoints" / f"{step:06d}"
                 ckpt_dir.mkdir(parents=True, exist_ok=True)
                 model.save_pretrained(ckpt_dir / "pretrained_model")
-                logger.info(f"Checkpoint saved at step {step}")
+                tqdm.write(f"Checkpoint saved at step {step}")
 
-        # Check early stopping after epoch
+        pbar.close()
+
+        # End of epoch - log train metrics
+        if epoch_total > 0:
+            train_loss = epoch_loss / epoch_total
+            train_acc = 100.0 * epoch_correct / epoch_total
+            tqdm.write(f"epoch:{epoch} step:{step} train_loss:{train_loss:.4f} train_acc:{train_acc:.1f}%")
+
+        # Validation at end of each epoch
+        val_loss, val_acc = evaluate(model, val_loader, device)
+        tqdm.write(f"  [VAL] epoch:{epoch} val_loss:{val_loss:.4f} val_acc:{val_acc:.1f}%")
+
+        # Best model selection
+        if val_loss < best_val_loss - min_delta:
+            best_val_loss = val_loss
+            best_val_acc = val_acc
+            best_step = step
+            best_epoch = epoch
+            patience_counter = 0
+
+            # Save best model
+            best_dir = output_dir / "best_model"
+            if best_dir.exists():
+                shutil.rmtree(best_dir)
+            best_dir.mkdir(parents=True)
+            model.save_pretrained(best_dir)
+            tqdm.write(f"  [BEST] New best model saved at epoch {epoch} (val_loss={val_loss:.4f}, val_acc={val_acc:.1f}%)")
+        else:
+            patience_counter += 1
+            tqdm.write(f"  [PATIENCE] {patience_counter}/{patience} (best was epoch {best_epoch})")
+
+        # Early stopping
         if patience_counter >= patience:
+            tqdm.write(f"Early stopping triggered at epoch {epoch}")
             break
+
+        model.train()
 
     # Final summary
     logger.info("=" * 60)
     logger.info("Training complete!")
-    logger.info(f"Best model: step {best_step}, val_loss={best_val_loss:.4f}, val_acc={best_val_acc:.1f}%")
+    logger.info(f"Best model: epoch {best_epoch} (step {best_step}), val_loss={best_val_loss:.4f}, val_acc={best_val_acc:.1f}%")
     logger.info(f"Best model saved at: {output_dir / 'best_model'}")
     logger.info("=" * 60)
 
