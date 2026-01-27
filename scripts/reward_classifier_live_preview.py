@@ -17,7 +17,7 @@ def main():
     parser.add_argument(
         "--model_path",
         type=str,
-        default="/home/gota/ggando/ml/so101-playground/outputs/reward_classifier_grasp_only_v1/final_model",
+        default="/home/gota/ggando/ml/so101-playground/outputs/reward_classifier_grasp_only_v4/best_model",
         help="Path to trained reward classifier",
     )
     parser.add_argument(
@@ -29,7 +29,7 @@ def main():
     parser.add_argument(
         "--dataset_path",
         type=str,
-        default="/home/gota/.cache/huggingface/lerobot/gtgando/so101_grasp_only_reward_v1",
+        default="/home/gota/.cache/huggingface/lerobot/gtgando/so101_grasp_only_reward_v4",
         help="Path to dataset for normalization stats",
     )
     parser.add_argument(
