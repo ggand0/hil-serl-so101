@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live preview with reward classifier inference overlay."""
+"""Live preview with reward classifier inference overlay and optional teleoperation."""
 
 import argparse
 import cv2
@@ -7,9 +7,45 @@ import torch
 import numpy as np
 from pathlib import Path
 
-from lerobot.policies.factory import make_policy
-from lerobot.configs.policies import PreTrainedConfig
-from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
+from lerobot.policies.sac.reward_model.modeling_classifier import Classifier
+
+
+def setup_teleoperation(
+    follower_port: str,
+    leader_port: str,
+    calibration_dir: str,
+    follower_id: str = "ggando_so101_follower",
+    leader_id: str = "ggando_so101_leader",
+):
+    """Initialize leader and follower robots for teleoperation."""
+    from lerobot.robots.so101_follower.config_so101_follower import SO101FollowerConfig
+    from lerobot.robots.utils import make_robot_from_config
+    from lerobot.teleoperators.so101_leader.config_so101_leader import SO101LeaderConfig
+    from lerobot.teleoperators.utils import make_teleoperator_from_config
+
+    calibration_path = Path(calibration_dir)
+
+    # Initialize follower
+    follower_config = SO101FollowerConfig(
+        port=follower_port,
+        id=follower_id,
+        calibration_dir=calibration_path / "robots" / "so101_follower",
+        use_degrees=True,
+    )
+    follower = make_robot_from_config(follower_config)
+    follower.connect()
+
+    # Initialize leader
+    leader_config = SO101LeaderConfig(
+        port=leader_port,
+        id=leader_id,
+        calibration_dir=calibration_path / "teleoperators" / "so101_leader",
+        use_degrees=True,
+    )
+    leader = make_teleoperator_from_config(leader_config)
+    leader.connect()
+
+    return follower, leader
 
 
 def main():
@@ -25,12 +61,6 @@ def main():
         type=str,
         default="/dev/video0",
         help="Camera device path or index",
-    )
-    parser.add_argument(
-        "--dataset_path",
-        type=str,
-        default="/home/gota/.cache/huggingface/lerobot/gtgando/so101_grasp_only_reward_v4",
-        help="Path to dataset for normalization stats",
     )
     parser.add_argument(
         "--threshold",
@@ -50,33 +80,49 @@ def main():
         default=None,
         help="Output video file path (e.g., output.mp4)",
     )
+    parser.add_argument(
+        "--teleop",
+        action="store_true",
+        help="Enable teleoperation (leader controls follower)",
+    )
+    parser.add_argument(
+        "--follower_port",
+        type=str,
+        default="/dev/ttyACM0",
+        help="Follower robot port",
+    )
+    parser.add_argument(
+        "--leader_port",
+        type=str,
+        default="/dev/ttyACM1",
+        help="Leader robot port",
+    )
+    parser.add_argument(
+        "--calibration_dir",
+        type=str,
+        default="/home/gota/.cache/huggingface/lerobot/calibration",
+        help="Calibration directory",
+    )
+    parser.add_argument(
+        "--follower_id",
+        type=str,
+        default="ggando_so101_follower",
+        help="Follower robot ID (must match calibration file)",
+    )
+    parser.add_argument(
+        "--leader_id",
+        type=str,
+        default="ggando_so101_leader",
+        help="Leader robot ID (must match calibration file)",
+    )
     args = parser.parse_args()
 
-    # Load model
+    # Load model directly using Classifier.from_pretrained (same as eval script)
     print(f"Loading model from {args.model_path}...")
-    config = PreTrainedConfig.from_pretrained(args.model_path)
-    config.pretrained_path = args.model_path
-
-    # Load dataset metadata for normalization stats
-    dataset_root = Path(args.dataset_path)
-    # Read repo_id from meta/info.json
-    import json
-    info_path = dataset_root / "meta" / "info.json"
-    with open(info_path) as f:
-        info = json.load(f)
-    repo_id = info.get("repo_id", dataset_root.name)
-    ds_meta = LeRobotDatasetMetadata(
-        repo_id=repo_id,
-        root=dataset_root,
-    )
-
-    # Create policy
-    policy = make_policy(cfg=config, ds_meta=ds_meta)
-    policy.eval()
-
-    # Move to GPU if available
+    model = Classifier.from_pretrained(args.model_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    policy = policy.to(device)
+    model = model.to(device)
+    model.eval()
     print(f"Model loaded on {device}")
 
     # Open camera
@@ -93,10 +139,32 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-    print("Press 'q' to quit")
-    print("Press 't' to adjust threshold (+0.1)")
-    print("Press 'r' to reset threshold to 0.5")
-    print("Press 'v' to toggle recording")
+    # Setup teleoperation if enabled
+    follower = None
+    leader = None
+    if args.teleop:
+        print("Setting up teleoperation...")
+        try:
+            follower, leader = setup_teleoperation(
+                args.follower_port,
+                args.leader_port,
+                args.calibration_dir,
+                args.follower_id,
+                args.leader_id,
+            )
+            print("Teleoperation ready - leader controls follower")
+        except Exception as e:
+            print(f"Failed to setup teleoperation: {e}")
+            print("Continuing without teleoperation...")
+            args.teleop = False
+
+    print("\nControls:")
+    print("  'q' - Quit")
+    print("  't' - Increase threshold (+0.1)")
+    print("  'r' - Reset threshold to 0.5")
+    print("  'v' - Toggle recording")
+    if args.teleop:
+        print("  Leader arm controls follower")
 
     threshold = args.threshold
 
@@ -110,6 +178,14 @@ def main():
         print(f"Recording to {args.record}")
 
     while True:
+        # Teleoperation step
+        if args.teleop and follower is not None and leader is not None:
+            try:
+                action = leader.get_action()
+                follower.send_action(action)
+            except Exception as e:
+                print(f"Teleop error: {e}")
+
         ret, frame = cap.read()
         if not ret:
             print("Error: Could not read frame")
@@ -133,7 +209,7 @@ def main():
         # Add batch dimension
         img_tensor = img_tensor.unsqueeze(0).to(device)
 
-        # Create batch dict
+        # Create batch dict for normalization
         batch = {
             "observation.images.gripper_cam": img_tensor,
             "next.reward": torch.zeros(1, 1).to(device),  # Dummy for normalization
@@ -141,16 +217,16 @@ def main():
 
         # Run inference
         with torch.no_grad():
-            pred = policy.predict_reward(batch, threshold=threshold)
+            # Normalize and get images
+            batch_norm = model.normalize_inputs(batch)
+            images = [batch_norm["observation.images.gripper_cam"]]
 
-            # Get probability
-            batch_normalized = policy.normalize_inputs(batch)
-            images = [batch_normalized["observation.images.gripper_cam"]]
-            output = policy.predict(images)
-            prob = output.probabilities.item()
+            # Get predictions
+            outputs = model.predict(images)
+            prob = outputs.probabilities.item()
 
         # Draw results on frame
-        is_success = pred.item() > 0.5
+        is_success = prob > threshold
 
         # Draw probability bar
         bar_width = 200
@@ -224,6 +300,10 @@ def main():
             cv2.circle(frame, (620, 20), 10, (0, 0, 255), -1)
             cv2.putText(frame, "REC", (580, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
+        # Teleop indicator
+        if args.teleop:
+            cv2.putText(frame, "TELEOP", (10, 470), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
         # Write frame to video
         if recording and video_writer is not None:
             video_writer.write(frame)
@@ -258,6 +338,20 @@ def main():
         video_writer.release()
         print("Video saved")
     cv2.destroyAllWindows()
+
+    # Cleanup teleoperation
+    if follower is not None:
+        try:
+            follower.disconnect()
+            print("Follower disconnected")
+        except Exception:
+            pass
+    if leader is not None:
+        try:
+            leader.disconnect()
+            print("Leader disconnected")
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
