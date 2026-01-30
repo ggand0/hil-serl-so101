@@ -1,6 +1,6 @@
 {
-    "output_dir": "/home/gota/ggando/ml/so101-playground/outputs/hilserl_grasp_only",
-    "job_name": "hilserl_grasp_only",
+    "output_dir": "/home/gota/ggando/ml/so101-playground/outputs/hilserl_grasp_only_v2",
+    "job_name": "hilserl_grasp_only_v2",
     "resume": true,
     "seed": 1000,
     "num_workers": 4,
@@ -47,7 +47,7 @@
             }
         },
         "device": "cuda",
-        "storage_device": "cuda",
+        "storage_device": "cpu",
         "use_amp": false,
         "dataset_stats": {
             "observation.images.gripper_cam": {
@@ -59,7 +59,7 @@
                 "max": [0.6, 1.5, 2.0, 2.0, 1.6, 1.0, 2.0, 5.0, 2.5, 3.5, 0.5, 2.0, 0.45, 0.01, 0.25, 0.1, 0.0, 0.0]
             },
             "action": {
-                "min": [-1.0, -1.0, -1.0, 0.0],
+                "min": [-1.0, -1.0, -1.0, -1.0],
                 "max": [1.0, 1.0, 1.0, 1.0]
             }
         },
@@ -130,7 +130,7 @@
         "episode": 0,
         "device": "cuda",
         "push_to_hub": false,
-        "reward_classifier_pretrained_path": "/home/gota/ggando/ml/so101-playground/outputs/reward_classifier_grasp_only_v1/final_model",
+        "reward_classifier_pretrained_path": "/home/gota/ggando/ml/so101-playground/outputs/reward_classifier_grasp_only_v4/best_model",
         "features": {
             "observation.images.gripper_cam": {
                 "type": "VISUAL",
@@ -198,12 +198,12 @@
             "add_ee_pose_to_observation": false,
             "add_full_proprioception": true,
             "use_radians": true,
-            "normalize_images": false,
+            "normalize_images": true,
             "crop_params_dict": {
                 "observation.images.gripper_cam": [0, 80, 480, 480]
             },
             "resize_size": [128, 128],
-            "control_time_s": 8.0,
+            "control_time_s": 10.0,
             "fixed_reset_joint_positions": null,
             "reset_time_s": 2.0,
             "reset_delay_s": 2.0,
