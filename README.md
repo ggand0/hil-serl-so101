@@ -260,18 +260,27 @@ Record with IK-based end-effector control and locked wrist joints:
 uv run lerobot-record --config outputs/hilserl_drqv2/record_config.json
 ```
 
-### Record Reward Classifier Dataset
+### Record with JSON Config
 
-Record demonstrations for training the reward classifier:
+Record demonstrations using a JSON config file:
 
 ```bash
-uv run python -m lerobot.scripts.rl.gym_manipulator --config_path configs/reward_classifier_record_15ep_config.json
+uv run python -m lerobot.scripts.rl.gym_manipulator --config_path configs/grasp_only_record_angled_10ep_config.json
 ```
 
 **Controls:**
 - Leader arm controls follower (intervention enabled by default)
 - `ESC` - End episode
 - `q` - Quit recording
+
+### Unlock Motors
+
+If motors get stuck with torque enabled (e.g., after a crash):
+
+```bash
+uv run python scripts/unlock_motors.py
+uv run python scripts/unlock_motors.py --port /dev/ttyACM1  # Different port
+```
 
 ### Train Reward Classifier
 
@@ -356,6 +365,7 @@ Edit the script to configure source datasets and excluded episodes.
 | `scripts/ik_reset_position.py` | Calibrate cube position |
 | `scripts/adjust_wrist_angles.py` | Adjust wrist joint angles |
 | `scripts/merge_datasets.py` | Merge datasets with filtering |
+| `scripts/unlock_motors.py` | Disable motor torque |
 
 ## Troubleshooting
 
