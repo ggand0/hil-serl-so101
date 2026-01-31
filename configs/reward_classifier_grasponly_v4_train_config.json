@@ -33,6 +33,9 @@
         "repo_id": "gtgando/so101_grasp_only_reward_v4",
         "root": "/home/gota/.cache/huggingface/lerobot/gtgando/so101_grasp_only_reward_v4",
         "episodes": null,
+        "crop_params_dict": {
+            "observation.images.gripper_cam": [0, 80, 480, 480]
+        },
         "image_transforms": {
             "enable": true,
             "max_num_transforms": 4,
@@ -93,12 +96,14 @@
     "use_policy_training_preset": true,
     "optimizer": null,
     "scheduler": null,
+    "val_ratio": 0.15,
+    "patience": 10,
     "wandb": {
         "enable": false,
         "disable_artifact": true,
         "project": "so101-reward-classifier",
         "entity": null,
-        "notes": "Binary reward classifier with all data: positive, negative, nighttime, daytime_negative",
+        "notes": "Binary reward classifier with frame-level train/val split. Data: positive, negative, nighttime, daytime_negative",
         "run_id": null,
         "mode": null
     }

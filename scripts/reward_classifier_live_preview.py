@@ -192,10 +192,9 @@ def main():
             break
 
         # Preprocess frame for classifier
-        # Center crop 640x480 -> 480x480
-        h, w = frame.shape[:2]
-        crop_x = (w - 480) // 2
-        cropped = frame[:, crop_x:crop_x+480]
+        # Crop params: (top, left, height, width) - matches training config
+        crop_top, crop_left, crop_h, crop_w = 0, 80, 480, 480
+        cropped = frame[crop_top:crop_top+crop_h, crop_left:crop_left+crop_w]
 
         # Convert BGR to RGB
         rgb_frame = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)

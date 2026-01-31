@@ -14,6 +14,7 @@ warnings.filterwarnings("ignore", message=".*video decoding and encoding capabil
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torchvision.transforms.functional as TF
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
@@ -58,6 +59,24 @@ def make_image_transforms(cfg_dict: dict | None) -> ImageTransforms | None:
     return ImageTransforms(transforms_cfg)
 
 
+def apply_crop(batch: dict, crop_params: dict, image_keys: list[str]) -> dict:
+    """Apply crop to image tensors in batch.
+
+    Args:
+        batch: Dictionary containing image tensors
+        crop_params: Dict mapping image key to (top, left, height, width)
+        image_keys: List of image keys to crop
+
+    Returns:
+        Batch with cropped images
+    """
+    for key in image_keys:
+        if key in batch and key in crop_params:
+            top, left, h, w = crop_params[key]
+            batch[key] = TF.crop(batch[key], top, left, h, w)
+    return batch
+
+
 def create_train_val_split(dataset, val_ratio: float = 0.15, seed: int = 42):
     """Random frame-level split for classifier training."""
     num_frames = len(dataset)
@@ -89,7 +108,7 @@ def create_train_val_split(dataset, val_ratio: float = 0.15, seed: int = 42):
     return train_indices, val_indices
 
 
-def evaluate(model, dataloader, device):
+def evaluate(model, dataloader, device, crop_params=None, image_keys=None):
     """Evaluate model on dataloader, return loss and accuracy."""
     model.eval()
     total_loss = 0.0
@@ -99,6 +118,8 @@ def evaluate(model, dataloader, device):
     with torch.no_grad():
         for batch in dataloader:
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            if crop_params and image_keys:
+                batch = apply_crop(batch, crop_params, image_keys)
             loss, metrics = model(batch)
             total_loss += loss.item() * batch["next.reward"].size(0)
             correct += metrics["correct"]
@@ -142,6 +163,12 @@ def train(
         image_transforms=image_transforms,
         video_backend=cfg["dataset"].get("video_backend", "pyav"),
     )
+
+    # Get crop params and image keys for preprocessing
+    crop_params = cfg["dataset"].get("crop_params_dict")
+    image_keys = [k for k in cfg["policy"]["input_features"] if "image" in k]
+    if crop_params:
+        logger.info(f"Using crop params: {crop_params}")
 
     # Train/val split
     train_indices, val_indices = create_train_val_split(dataset, val_ratio=val_ratio)
@@ -254,6 +281,10 @@ def train(
 
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
+            # Apply crop if specified
+            if crop_params:
+                batch = apply_crop(batch, crop_params, image_keys)
+
             optimizer.zero_grad()
             loss, metrics = model(batch)
             loss.backward()
@@ -289,7 +320,7 @@ def train(
             tqdm.write(f"epoch:{epoch} step:{step} train_loss:{train_loss:.4f} train_acc:{train_acc:.1f}%")
 
         # Validation at end of each epoch
-        val_loss, val_acc = evaluate(model, val_loader, device)
+        val_loss, val_acc = evaluate(model, val_loader, device, crop_params, image_keys)
         tqdm.write(f"  [VAL] epoch:{epoch} val_loss:{val_loss:.4f} val_acc:{val_acc:.1f}%")
 
         # Best model selection
