@@ -323,6 +323,23 @@ uv run python -m lerobot.scripts.rl.learner --config_path configs/reach_grasp_hi
 uv run python -m lerobot.scripts.rl.actor --config_path configs/reach_grasp_hilserl_train_config.json
 ```
 
+### Run SAC Policy Inference
+
+Evaluate a trained SAC policy:
+
+```bash
+uv run python scripts/hilserl_inference.py \
+    --config_path configs/grasp_only_hilserl_eval_config.json \
+    --checkpoint outputs/hilserl_grasp_only_v2/checkpoints/003000/pretrained_model \
+    --num_episodes 5
+```
+
+**Options:**
+- `--config_path` - Config JSON (use eval config for fixed reset position)
+- `--checkpoint` - Path to `pretrained_model` folder
+- `--num_episodes` - Number of episodes to run (default: 10)
+- `--device` - Torch device (default: cuda)
+
 ### Train with DrQ-v2
 
 Start the learner process (runs on GPU, loads offline buffer):
@@ -358,6 +375,7 @@ Edit the script to configure source datasets and excluded episodes.
 | `lerobot-record --policy.path=...` | Run IL policy inference |
 | `python -m lerobot.scripts.rl.learner` | Start SAC learner |
 | `python -m lerobot.scripts.rl.actor` | Start SAC actor |
+| `scripts/hilserl_inference.py` | Run trained SAC policy |
 | `lerobot-hilserl-learner` | Start DrQ-v2 learner |
 | `lerobot-hilserl-actor` | Start DrQ-v2 actor |
 | `scripts/rl_inference.py` | Run RGB RL policy (sim-to-real) |
