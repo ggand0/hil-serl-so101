@@ -165,7 +165,7 @@ Edit the script to configure source datasets and excluded episodes.
 | `python -m lerobot.scripts.rl.actor` | Start SAC actor |
 | `scripts/hilserl_inference.py` | Run trained SAC policy |
 | `scripts/merge_datasets.py` | Merge datasets with filtering |
-| `scripts/unlock_motors.py` | Disable motor torque |
+| `scripts/utils/unlock_motors.py` | Disable motor torque |
 
 ## Troubleshooting
 
@@ -193,8 +193,8 @@ RUST_LOG=error uv run lerobot-record ...
 
 **Unlock motors** (if stuck with torque enabled after crash):
 ```bash
-uv run python scripts/unlock_motors.py
-uv run python scripts/unlock_motors.py --port /dev/ttyACM1  # Different port
+uv run python scripts/utils/unlock_motors.py
+uv run python scripts/utils/unlock_motors.py --port /dev/ttyACM1  # Different port
 ```
 
 ## Documentation
