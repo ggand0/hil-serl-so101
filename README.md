@@ -196,3 +196,9 @@ RUST_LOG=error uv run lerobot-record ...
 uv run python scripts/unlock_motors.py
 uv run python scripts/unlock_motors.py --port /dev/ttyACM1  # Different port
 ```
+
+## Documentation
+
+- [docs/SIM2REAL.md](docs/SIM2REAL.md) - Sim2real deployment scripts (experimental)
+- [docs/CALIBRATION.md](docs/CALIBRATION.md) - Additional calibration scripts
+- [docs/DATASETS.md](docs/DATASETS.md) - Dataset creation and labeling
