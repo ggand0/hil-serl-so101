@@ -1,6 +1,11 @@
-# so101-playground
+# hil-serl-so101
 
-Imitation Learning experiments with the SO-101 robot arm using [LeRobot](https://github.com/huggingface/lerobot).
+Human-in-the-Loop SERL (HIL-SERL) training for the SO-101 robot arm using [LeRobot](https://github.com/huggingface/lerobot).
+
+Achieves 60% autonomous grasp success rate after ~250 training episodes with human interventions.
+
+**Related repos:**
+- [pick-101](https://github.com/ggand0/pick-101) - MuJoCo simulation for sim2real experiments
 
 ## Hardware Setup
 
@@ -10,6 +15,19 @@ Imitation Learning experiments with the SO-101 robot arm using [LeRobot](https:/
 - **GPU**: AMD with ROCm 6.4
 
 ## Prerequisites
+
+### LeRobot Fork (Required)
+
+This project requires a modified LeRobot with HIL-SERL fixes:
+
+```bash
+git clone https://github.com/ggand0/lerobot
+cd lerobot
+git checkout feat/hil-serl
+pip install -e ".[hilserl]"
+```
+
+### Project Setup
 
 ```bash
 # Install dependencies
@@ -32,11 +50,13 @@ First verify the leader-follower setup works:
 uv run lerobot-teleoperate \
     --robot.type=so101_follower \
     --robot.port=/dev/ttyACM0 \
-    --robot.id=ggando_so101_follower \
+    --robot.id=my_so101_follower \
     --teleop.type=so101_leader \
     --teleop.port=/dev/ttyACM1 \
-    --teleop.id=ggando_so101_leader
+    --teleop.id=my_so101_leader
 ```
+
+> **Note:** Replace `my_so101_follower` and `my_so101_leader` with your calibration IDs from `lerobot-calibrate`.
 
 ### 2. Record Demonstrations
 
@@ -46,11 +66,11 @@ Collect training data by teleoperating the robot:
 uv run lerobot-record \
     --robot.type=so101_follower \
     --robot.port=/dev/ttyACM0 \
-    --robot.id=ggando_so101_follower \
+    --robot.id=my_so101_follower \
     --robot.cameras="{ gripper_cam: {type: opencv, index_or_path: /dev/video0, width: 640, height: 480, fps: 30}}" \
     --teleop.type=so101_leader \
     --teleop.port=/dev/ttyACM1 \
-    --teleop.id=ggando_so101_leader \
+    --teleop.id=my_so101_leader \
     --display_data=true \
     --dataset.repo_id=${HF_USER}/so101_red_cube_to_bowl \
     --dataset.num_episodes=30 \
@@ -99,11 +119,11 @@ Run the trained policy on the robot:
 uv run lerobot-record \
     --robot.type=so101_follower \
     --robot.port=/dev/ttyACM0 \
-    --robot.id=ggando_so101_follower \
+    --robot.id=my_so101_follower \
     --robot.cameras="{ gripper_cam: {type: opencv, index_or_path: /dev/video0, width: 640, height: 480, fps: 30}}" \
     --teleop.type=so101_leader \
     --teleop.port=/dev/ttyACM1 \
-    --teleop.id=ggando_so101_leader \
+    --teleop.id=my_so101_leader \
     --display_data=true \
     --dataset.repo_id=${HF_USER}/eval_so101_red_cube_bowl \
     --dataset.num_episodes=10 \
@@ -121,9 +141,11 @@ uv run lerobot-record \
     --policy.path=outputs/train/act_so101_red_cube_bowl/checkpoints/last/pretrained_model
 ```
 
-## RL Deployment (Sim-to-Real)
+## Sim2Real Deployment (Experimental)
 
-Deploy MuJoCo-trained DrQ-v2 policies to the real robot.
+Deploy MuJoCo-trained DrQ-v2 policies from [pick-101](https://github.com/ggand0/pick-101) to the real robot.
+
+> **Note:** Direct sim2real transfer did not work due to domain gap. These scripts are kept for potential sim-pretrain → HIL-SERL fine-tuning workflows.
 
 ### Calibrate Cube Position
 
@@ -176,8 +198,8 @@ Run DrQ-v2 policy trained with segmentation + depth observations:
 ```bash
 # Full inference with preview
 uv run python scripts/rl_inference_seg_depth.py \
-    --checkpoint ~/ggando/ml/pick-101/runs/seg_depth_rl/20260119_192807/snapshots/1200000_snapshot.pt \
-    --seg_checkpoint ~/ggando/ml/pick-101/outputs/efficientvit_seg_merged/best-v1.ckpt \
+    --checkpoint /path/to/pick-101/runs/seg_depth_rl/snapshots/snapshot.pt \
+    --seg_checkpoint /path/to/pick-101/outputs/efficientvit_seg_merged/best-v1.ckpt \
     --mujoco_mode \
     --cube_x 0.25 --cube_y 0.0 \
     --camera_index 1 \
@@ -186,16 +208,16 @@ uv run python scripts/rl_inference_seg_depth.py \
 
 # With debug output
 uv run python scripts/rl_inference_seg_depth.py \
-    --checkpoint ~/ggando/ml/pick-101/runs/seg_depth_rl/20260119_192807/snapshots/1200000_snapshot.pt \
-    --seg_checkpoint ~/ggando/ml/pick-101/outputs/efficientvit_seg_merged/best-v1.ckpt \
+    --checkpoint /path/to/pick-101/runs/seg_depth_rl/snapshots/snapshot.pt \
+    --seg_checkpoint /path/to/pick-101/outputs/efficientvit_seg_merged/best-v1.ckpt \
     --mujoco_mode \
     --debug_state \
     --cube_x 0.25 --cube_y 0.0
 
 # Dry run (mock robot/camera)
 uv run python scripts/rl_inference_seg_depth.py \
-    --checkpoint ~/ggando/ml/pick-101/runs/seg_depth_rl/20260119_192807/snapshots/1200000_snapshot.pt \
-    --seg_checkpoint ~/ggando/ml/pick-101/outputs/efficientvit_seg_merged/best-v1.ckpt \
+    --checkpoint /path/to/pick-101/runs/seg_depth_rl/snapshots/snapshot.pt \
+    --seg_checkpoint /path/to/pick-101/outputs/efficientvit_seg_merged/best-v1.ckpt \
     --dry_run
 ```
 
@@ -220,9 +242,11 @@ uv run python scripts/test_ik_motion.py
 uv run python scripts/test_ik_motion.py --dry_run
 ```
 
-## HIL-SERL (Human-in-the-Loop RL)
+## HIL-SERL (Human-in-the-Loop RL) ⭐
 
-Online RL training with human interventions using DrQ-v2.
+**Recommended approach.** Online RL training with human interventions using SAC.
+
+Achieves 60% grasp success after ~250 episodes. Can also fine-tune sim-pretrained policies.
 
 ### Calibrate Robot
 
@@ -233,13 +257,13 @@ Calibrate leader and follower arms:
 uv run lerobot-calibrate \
     --robot.type=so101_follower \
     --robot.port=/dev/ttyACM0 \
-    --robot.id=ggando_so101_follower
+    --robot.id=my_so101_follower
 
 # Calibrate leader
 uv run lerobot-calibrate \
     --teleop.type=so101_leader \
     --teleop.port=/dev/ttyACM1 \
-    --teleop.id=ggando_so101_leader
+    --teleop.id=my_so101_leader
 ```
 
 ### Adjust Wrist Angles
