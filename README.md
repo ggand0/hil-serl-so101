@@ -444,21 +444,3 @@ RUST_LOG=error uv run lerobot-record ...
 ```
 
 **torchcodec FFmpeg error:** Use `--dataset.video_backend=pyav`
-
-## Experiments
-
-| Task | Dataset | Model | Result |
-|------|---------|-------|--------|
-| Green cube to paper | [so101_pick_lift_cube](https://huggingface.co/datasets/gtgando/so101_pick_lift_cube) | [act_so101_cube_policy](https://huggingface.co/gtgando/act_so101_cube_policy) | Partial success |
-| Red cube to bowl | [so101_red_cube_to_bowl](https://huggingface.co/datasets/gtgando/so101_red_cube_to_bowl) | [act_so101_red_cube_bowl_policy](https://huggingface.co/gtgando/act_so101_red_cube_bowl_policy) | Partial success |
-
-## Documentation
-
-- [RED_CUBE_BOWL_TRAINING.md](RED_CUBE_BOWL_TRAINING.md) - Detailed training guide
-- [devlogs/](devlogs/) - Experiment logs and debugging notes
-
-## References
-
-- [LeRobot IL Tutorial](https://huggingface.co/docs/lerobot/il_robots)
-- [LeRobot GitHub](https://github.com/huggingface/lerobot)
-- [ACT Paper](https://arxiv.org/abs/2304.13705)

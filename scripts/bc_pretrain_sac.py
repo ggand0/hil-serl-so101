@@ -18,6 +18,7 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -70,7 +71,8 @@ def create_bc_dataloader(
     return dataloader
 
 
-def preprocess_batch(batch: dict, policy: SACPolicy, device: torch.device) -> tuple[dict, torch.Tensor]:
+def preprocess_batch(batch: dict, policy: SACPolicy, device: torch.device,
+                     resize_size: tuple = (128, 128), crop_params: dict = None) -> tuple[dict, torch.Tensor]:
     """Preprocess batch for BC training."""
     # Get observation keys from policy config
     obs_keys = list(policy.config.input_features.keys())
@@ -82,9 +84,18 @@ def preprocess_batch(batch: dict, policy: SACPolicy, device: torch.device) -> tu
             obs = batch[key].to(device)
             # Handle image observations
             if "image" in key:
-                # Dataset stores images in [0, 1], but we may need [0, 255]
-                if obs.max() <= 1.0:
-                    obs = obs * 255.0
+                # Dataset stores images in [0, 1] - keep as is
+                # The policy's encoder handles normalization internally
+
+                # Apply cropping if specified
+                if crop_params and key in crop_params:
+                    y, x, h, w = crop_params[key]
+                    obs = obs[..., y:y+h, x:x+w]
+
+                # Resize to match policy input size
+                if resize_size:
+                    obs = F.interpolate(obs, size=resize_size, mode='bilinear', align_corners=False)
+
             observations[key] = obs
 
     # Get actions
@@ -161,9 +172,34 @@ def bc_pretrain(
         dataset = make_dataset(cfg)
     logging.info(f"Dataset size: {len(dataset)} samples")
 
+    # Convert dataset stats from numpy to tensor (required by NormalizeBuffer)
+    def convert_stats_to_tensor(stats):
+        converted = {}
+        for key, value in stats.items():
+            if isinstance(value, dict):
+                converted[key] = {}
+                for k, v in value.items():
+                    if isinstance(v, np.ndarray):
+                        converted[key][k] = torch.from_numpy(v).float()
+                    elif isinstance(v, torch.Tensor):
+                        converted[key][k] = v.float()
+                    else:
+                        converted[key][k] = v
+            else:
+                converted[key] = value
+        return converted
+
+    # Create a modified metadata with tensor stats
+    class MetaWithTensorStats:
+        def __init__(self, meta):
+            self.features = meta.features
+            self.stats = convert_stats_to_tensor(meta.stats)
+
+    tensor_meta = MetaWithTensorStats(dataset.meta)
+
     # Create policy with dataset metadata
     logging.info("Creating SAC policy")
-    policy = make_policy(cfg.policy, ds_meta=dataset.meta)
+    policy = make_policy(cfg.policy, ds_meta=tensor_meta)
     policy = policy.to(device)
     policy.train()
 
@@ -193,6 +229,16 @@ def bc_pretrain(
     # Create dataloader from already loaded dataset
     dataloader = create_bc_dataloader(dataset, batch_size=batch_size, num_workers=num_workers)
 
+    # Get image preprocessing params from config
+    crop_params = None
+    resize_size = (128, 128)  # Default
+    if hasattr(cfg, 'env') and hasattr(cfg.env, 'wrapper'):
+        crop_params = getattr(cfg.env.wrapper, 'crop_params_dict', None)
+        rs = getattr(cfg.env.wrapper, 'resize_size', None)
+        if rs:
+            resize_size = tuple(rs)
+    logging.info(f"Image preprocessing: crop={crop_params}, resize={resize_size}")
+
     # Training loop
     logging.info(f"Starting BC pretraining for {bc_steps} steps")
     step = 0
@@ -208,7 +254,7 @@ def bc_pretrain(
                 break
 
             # Preprocess batch
-            observations, actions = preprocess_batch(batch, policy, device)
+            observations, actions = preprocess_batch(batch, policy, device, resize_size, crop_params)
 
             # Compute BC loss
             optimizer.zero_grad()
