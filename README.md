@@ -334,11 +334,23 @@ uv run python scripts/hilserl_inference.py \
     --num_episodes 5
 ```
 
+With video recording:
+
+```bash
+uv run python scripts/hilserl_inference.py \
+    --config_path configs/grasp_only_hilserl_eval_config.json \
+    --checkpoint outputs/hilserl_grasp_only_v2/checkpoints/003000/pretrained_model \
+    --num_episodes 5 \
+    --record_video --video_dir recordings/
+```
+
 **Options:**
 - `--config_path` - Config JSON (use eval config for fixed reset position)
 - `--checkpoint` - Path to `pretrained_model` folder
 - `--num_episodes` - Number of episodes to run (default: 10)
 - `--device` - Torch device (default: cuda)
+- `--record_video` - Record video of each episode
+- `--video_dir` - Directory to save videos (default: recordings/)
 
 ### Train with DrQ-v2
 
