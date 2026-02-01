@@ -2,6 +2,7 @@ tmp*
 *.png
 *.mp4
 calibration*/
+data/
 devlogs/
 recordings/
 outputs/
