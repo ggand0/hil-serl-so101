@@ -130,7 +130,7 @@
         "episode": 0,
         "device": "cuda",
         "push_to_hub": false,
-        "reward_classifier_pretrained_path": "/home/gota/ggando/ml/so101-playground/outputs/reward_classifier_grasp_only_v4/best_model",
+        "reward_classifier_pretrained_path": "/home/gota/ggando/ml/so101-playground/outputs/reward_classifier_grasp_only_v5/best_model",
         "features": {
             "observation.images.gripper_cam": {
                 "type": "VISUAL",
