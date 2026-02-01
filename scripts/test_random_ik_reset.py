@@ -26,6 +26,9 @@ from lerobot.cameras import opencv  # noqa: F401
 from lerobot.scripts.rl.gym_manipulator import make_robot_env
 from lerobot.envs.configs import HILSerlRobotEnvConfig
 
+# Safe positions (from ik_grasp_demo.py)
+REST_JOINTS_DEG = np.array([-3.4, -105.5, 98.1, 41.3, -6.3])  # Folded rest position
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -153,6 +156,36 @@ def main():
         logger.info("\nTest interrupted by user")
 
     finally:
+        # Safe return sequence (like ik_grasp_demo.py)
+        logger.info("Safe return sequence...")
+        try:
+            robot = env.unwrapped.robot
+            motor_names = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
+
+            # Get current position
+            current_pos_dict = robot.bus.sync_read("Present_Position", num_retry=3)
+            current_joints_deg = np.array([current_pos_dict[name] for name in motor_names])
+
+            # Interpolate to rest position
+            logger.info("  Returning to rest position...")
+            for i in range(20):
+                alpha = (i + 1) / 20
+                interp_joints = (1 - alpha) * current_joints_deg + alpha * REST_JOINTS_DEG
+                action_dict = {name: interp_joints[j] for j, name in enumerate(motor_names)}
+                action_dict["gripper"] = -50.0  # Close gripper
+                robot.bus.sync_write("Goal_Position", action_dict, num_retry=3)
+                time.sleep(0.1)
+
+            # Final rest position
+            action_dict = {name: REST_JOINTS_DEG[j] for j, name in enumerate(motor_names)}
+            action_dict["gripper"] = -50.0
+            robot.bus.sync_write("Goal_Position", action_dict, num_retry=3)
+            time.sleep(1.0)
+            logger.info("  Rest position reached")
+
+        except Exception as e:
+            logger.warning(f"  Safe return failed: {e}")
+
         logger.info("Closing environment...")
         env.close()
         logger.info("Done")

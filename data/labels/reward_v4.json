@@ -1,4 +1,0 @@
-{
-    "output_repo_id": "gtgando/so101_grasp_only_reward_v4",
-    "sources": ["grasp_only_positive", "grasp_only_negative", "nighttime", "daytime_negative"]
-}
