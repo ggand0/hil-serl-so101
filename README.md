@@ -1,6 +1,11 @@
-# so101-playground
+# hil-serl-so101
 
-Imitation Learning experiments with the SO-101 robot arm using [LeRobot](https://github.com/huggingface/lerobot).
+Human-in-the-Loop SERL (HIL-SERL) training for the SO-101 robot arm using [LeRobot](https://github.com/huggingface/lerobot).
+
+Achieves 60% autonomous grasp success rate after ~250 training episodes with human interventions.
+
+**Related repos:**
+- [pick-101](https://github.com/ggand0/pick-101) - MuJoCo simulation for sim2real experiments
 
 ## Hardware Setup
 
@@ -10,6 +15,19 @@ Imitation Learning experiments with the SO-101 robot arm using [LeRobot](https:/
 - **GPU**: AMD with ROCm 6.4
 
 ## Prerequisites
+
+### LeRobot Fork (Required)
+
+This project requires a modified LeRobot with HIL-SERL fixes:
+
+```bash
+git clone https://github.com/ggand0/lerobot
+cd lerobot
+git checkout feat/hil-serl
+pip install -e ".[hilserl]"
+```
+
+### Project Setup
 
 ```bash
 # Install dependencies
@@ -32,11 +50,13 @@ First verify the leader-follower setup works:
 uv run lerobot-teleoperate \
     --robot.type=so101_follower \
     --robot.port=/dev/ttyACM0 \
-    --robot.id=ggando_so101_follower \
+    --robot.id=my_so101_follower \
     --teleop.type=so101_leader \
     --teleop.port=/dev/ttyACM1 \
-    --teleop.id=ggando_so101_leader
+    --teleop.id=my_so101_leader
 ```
+
+> **Note:** Replace `my_so101_follower` and `my_so101_leader` with your calibration IDs from `lerobot-calibrate`.
 
 ### 2. Record Demonstrations
 
@@ -46,11 +66,11 @@ Collect training data by teleoperating the robot:
 uv run lerobot-record \
     --robot.type=so101_follower \
     --robot.port=/dev/ttyACM0 \
-    --robot.id=ggando_so101_follower \
+    --robot.id=my_so101_follower \
     --robot.cameras="{ gripper_cam: {type: opencv, index_or_path: /dev/video0, width: 640, height: 480, fps: 30}}" \
     --teleop.type=so101_leader \
     --teleop.port=/dev/ttyACM1 \
-    --teleop.id=ggando_so101_leader \
+    --teleop.id=my_so101_leader \
     --display_data=true \
     --dataset.repo_id=${HF_USER}/so101_red_cube_to_bowl \
     --dataset.num_episodes=30 \
@@ -99,11 +119,11 @@ Run the trained policy on the robot:
 uv run lerobot-record \
     --robot.type=so101_follower \
     --robot.port=/dev/ttyACM0 \
-    --robot.id=ggando_so101_follower \
+    --robot.id=my_so101_follower \
     --robot.cameras="{ gripper_cam: {type: opencv, index_or_path: /dev/video0, width: 640, height: 480, fps: 30}}" \
     --teleop.type=so101_leader \
     --teleop.port=/dev/ttyACM1 \
-    --teleop.id=ggando_so101_leader \
+    --teleop.id=my_so101_leader \
     --display_data=true \
     --dataset.repo_id=${HF_USER}/eval_so101_red_cube_bowl \
     --dataset.num_episodes=10 \
@@ -121,9 +141,11 @@ uv run lerobot-record \
     --policy.path=outputs/train/act_so101_red_cube_bowl/checkpoints/last/pretrained_model
 ```
 
-## RL Deployment (Sim-to-Real)
+## Sim2Real Deployment (Experimental)
 
-Deploy MuJoCo-trained DrQ-v2 policies to the real robot.
+Deploy MuJoCo-trained DrQ-v2 policies from [pick-101](https://github.com/ggand0/pick-101) to the real robot.
+
+> **Note:** Direct sim2real transfer did not work due to domain gap. These scripts are kept for potential sim-pretrain → HIL-SERL fine-tuning workflows.
 
 ### Calibrate Cube Position
 
@@ -169,6 +191,48 @@ uv run python scripts/rl_inference.py \
 - `--control_hz`: Control frequency (default 10Hz)
 - `--cube_x`, `--cube_y`: Expected cube position
 
+### Run Seg+Depth RL Inference
+
+Run DrQ-v2 policy trained with segmentation + depth observations:
+
+```bash
+# Full inference with preview
+uv run python scripts/rl_inference_seg_depth.py \
+    --checkpoint /path/to/pick-101/runs/seg_depth_rl/snapshots/snapshot.pt \
+    --seg_checkpoint /path/to/pick-101/outputs/efficientvit_seg_merged/best-v1.ckpt \
+    --mujoco_mode \
+    --cube_x 0.25 --cube_y 0.0 \
+    --camera_index 1 \
+    --preview \
+    --save_preview_video preview.mp4
+
+# With debug output
+uv run python scripts/rl_inference_seg_depth.py \
+    --checkpoint /path/to/pick-101/runs/seg_depth_rl/snapshots/snapshot.pt \
+    --seg_checkpoint /path/to/pick-101/outputs/efficientvit_seg_merged/best-v1.ckpt \
+    --mujoco_mode \
+    --debug_state \
+    --cube_x 0.25 --cube_y 0.0
+
+# Dry run (mock robot/camera)
+uv run python scripts/rl_inference_seg_depth.py \
+    --checkpoint /path/to/pick-101/runs/seg_depth_rl/snapshots/snapshot.pt \
+    --seg_checkpoint /path/to/pick-101/outputs/efficientvit_seg_merged/best-v1.ckpt \
+    --dry_run
+```
+
+**Mode flags:**
+- `--mujoco_mode`: For policies trained in pick-101 MuJoCo sim (no coordinate transform)
+- `--genesis_mode`: For policies trained in Genesis sim (applies coordinate transform)
+
+**Key options:**
+- `--seg_checkpoint`: Path to EfficientViT segmentation model
+- `--camera_index`: Camera device index (default 0)
+- `--preview`: Show live camera/segmentation preview
+- `--save_preview_video`: Save preview to video file
+- `--debug_state`: Print per-step debug info (seg classes, ee position, actions)
+- `--save_obs`: Save observation images for first 5 steps
+
 ### Test IK Motion
 
 Test the IK controller with simple movements:
@@ -178,17 +242,184 @@ uv run python scripts/test_ik_motion.py
 uv run python scripts/test_ik_motion.py --dry_run
 ```
 
+## HIL-SERL (Human-in-the-Loop RL) ⭐
+
+**Recommended approach.** Online RL training with human interventions using SAC.
+
+Achieves 60% grasp success after ~250 episodes. Can also fine-tune sim-pretrained policies.
+
+### Calibrate Robot
+
+Calibrate leader and follower arms:
+
+```bash
+# Calibrate follower
+uv run lerobot-calibrate \
+    --robot.type=so101_follower \
+    --robot.port=/dev/ttyACM0 \
+    --robot.id=my_so101_follower
+
+# Calibrate leader
+uv run lerobot-calibrate \
+    --teleop.type=so101_leader \
+    --teleop.port=/dev/ttyACM1 \
+    --teleop.id=my_so101_leader
+```
+
+### Adjust Wrist Angles
+
+Find correct wrist joint angles after recalibration:
+
+```bash
+uv run python scripts/adjust_wrist_angles.py
+```
+
+Commands: `3 <angle>` (wrist_flex), `4 <angle>` (wrist_roll), `+3/-3`, `+4/-4`, `r` (read), `l` (lift), `q` (quit)
+
+### Record Demonstrations (End-Effector Control)
+
+Record with IK-based end-effector control and locked wrist joints:
+
+```bash
+uv run lerobot-record --config outputs/hilserl_drqv2/record_config.json
+```
+
+### Record with JSON Config
+
+Record demonstrations using a JSON config file:
+
+```bash
+uv run python -m lerobot.scripts.rl.gym_manipulator --config_path configs/grasp_only_record_angled_10ep_config.json
+```
+
+**Controls:**
+- Leader arm controls follower (intervention enabled by default)
+- `ESC` - End episode
+- `q` - Quit recording
+
+### Unlock Motors
+
+If motors get stuck with torque enabled (e.g., after a crash):
+
+```bash
+uv run python scripts/unlock_motors.py
+uv run python scripts/unlock_motors.py --port /dev/ttyACM1  # Different port
+```
+
+### Train Reward Classifier
+
+```bash
+uv run python scripts/train_reward_classifier.py --config configs/reward_classifier_grasponly_v4_train_config.json
+```
+
+Uses custom training script with frame-level train/val split, early stopping, and best model selection.
+
+### Live Reward Classifier Preview
+
+Test the reward classifier with live camera feed:
+
+```bash
+uv run python scripts/reward_classifier_live_preview.py
+```
+
+**Options:**
+- `--model_path` - Path to trained classifier (default: v3)
+- `--threshold` - Classification threshold (default: 0.5)
+- `--record output.mp4` - Record video
+
+**Controls:**
+- `t` - Increase threshold by 0.1
+- `r` - Reset threshold to 0.5
+- `v` - Toggle recording
+- `q` - Quit
+
+### Train with SAC (Reach and Grasp)
+
+Run learner and actor in separate terminals:
+
+**Terminal 1 (Learner):**
+```bash
+uv run python -m lerobot.scripts.rl.learner --config_path configs/reach_grasp_hilserl_train_config.json
+```
+
+**Terminal 2 (Actor):**
+```bash
+uv run python -m lerobot.scripts.rl.actor --config_path configs/reach_grasp_hilserl_train_config.json
+```
+
+### Run SAC Policy Inference
+
+Evaluate a trained SAC policy:
+
+```bash
+uv run python scripts/hilserl_inference.py \
+    --config_path configs/grasp_only_hilserl_eval_config.json \
+    --checkpoint outputs/hilserl_grasp_only_v2/checkpoints/003000/pretrained_model \
+    --num_episodes 5
+```
+
+With video recording:
+
+```bash
+uv run python scripts/hilserl_inference.py \
+    --config_path configs/grasp_only_hilserl_eval_config.json \
+    --checkpoint outputs/hilserl_grasp_only_v2/checkpoints/003000/pretrained_model \
+    --num_episodes 5 \
+    --record_video --video_dir recordings/
+```
+
+**Options:**
+- `--config_path` - Config JSON (use eval config for fixed reset position)
+- `--checkpoint` - Path to `pretrained_model` folder
+- `--num_episodes` - Number of episodes to run (default: 10)
+- `--device` - Torch device (default: cuda)
+- `--record_video` - Record video of each episode
+- `--video_dir` - Directory to save videos (default: recordings/)
+
+### Train with DrQ-v2
+
+Start the learner process (runs on GPU, loads offline buffer):
+
+```bash
+uv run lerobot-hilserl-learner --config outputs/hilserl_drqv2/train_config.json
+```
+
+Start the actor process (controls robot, sends transitions to learner):
+
+```bash
+uv run lerobot-hilserl-actor --config outputs/hilserl_drqv2/train_config.json
+```
+
+### Merge Datasets
+
+Merge multiple datasets with episode filtering:
+
+```bash
+uv run python scripts/merge_datasets.py
+```
+
+Edit the script to configure source datasets and excluded episodes.
+
 ## Quick Reference
 
 | Command | Description |
 |---------|-------------|
+| `lerobot-calibrate` | Calibrate robot or teleop arm |
 | `lerobot-teleoperate` | Test leader-follower mirroring |
 | `lerobot-record` | Record demonstrations (with `--teleop`) |
 | `lerobot-train` | Train a policy on recorded data |
 | `lerobot-record --policy.path=...` | Run IL policy inference |
-| `scripts/rl_inference.py` | Run RL policy (sim-to-real) |
+| `python -m lerobot.scripts.rl.learner` | Start SAC learner |
+| `python -m lerobot.scripts.rl.actor` | Start SAC actor |
+| `scripts/hilserl_inference.py` | Run trained SAC policy |
+| `lerobot-hilserl-learner` | Start DrQ-v2 learner |
+| `lerobot-hilserl-actor` | Start DrQ-v2 actor |
+| `scripts/rl_inference.py` | Run RGB RL policy (sim-to-real) |
+| `scripts/rl_inference_seg_depth.py` | Run seg+depth RL policy (sim-to-real) |
 | `scripts/ik_reset_position.py` | Calibrate cube position |
-| `scripts/test_ik_motion.py` | Test IK controller |
+| `scripts/adjust_wrist_angles.py` | Adjust wrist joint angles |
+| `scripts/merge_datasets.py` | Merge datasets with filtering |
+| `scripts/unlock_motors.py` | Disable motor torque |
 
 ## Troubleshooting
 

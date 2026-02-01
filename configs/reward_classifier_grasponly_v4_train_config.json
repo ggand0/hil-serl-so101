@@ -1,0 +1,110 @@
+{
+    "policy": {
+        "type": "reward_classifier",
+        "push_to_hub": false,
+        "model_name": "helper2424/resnet10",
+        "model_type": "cnn",
+        "num_cameras": 1,
+        "num_classes": 2,
+        "hidden_dim": 256,
+        "latent_dim": 256,
+        "image_embedding_pooling_dim": 8,
+        "dropout_rate": 0.3,
+        "learning_rate": 3e-4,
+        "weight_decay": 0.02,
+        "grad_clip_norm": 1.0,
+        "image_size": 128,
+        "device": "cuda",
+        "use_amp": true,
+        "input_features": {
+            "observation.images.gripper_cam": {
+                "type": "VISUAL",
+                "shape": [3, 128, 128]
+            }
+        },
+        "output_features": {
+            "reward": {
+                "type": "STATE",
+                "shape": [1]
+            }
+        }
+    },
+    "dataset": {
+        "repo_id": "gtgando/so101_grasp_only_reward_v4",
+        "root": "/home/gota/.cache/huggingface/lerobot/gtgando/so101_grasp_only_reward_v4",
+        "episodes": null,
+        "crop_params_dict": {
+            "observation.images.gripper_cam": [0, 80, 480, 480]
+        },
+        "image_transforms": {
+            "enable": true,
+            "max_num_transforms": 4,
+            "random_order": true,
+            "tfs": {
+                "brightness": {
+                    "weight": 1.0,
+                    "type": "ColorJitter",
+                    "kwargs": {
+                        "brightness": [0.4, 1.6]
+                    }
+                },
+                "contrast": {
+                    "weight": 1.0,
+                    "type": "ColorJitter",
+                    "kwargs": {
+                        "contrast": [0.7, 1.3]
+                    }
+                },
+                "saturation": {
+                    "weight": 1.0,
+                    "type": "ColorJitter",
+                    "kwargs": {
+                        "saturation": [0.5, 1.5]
+                    }
+                },
+                "hue": {
+                    "weight": 1.0,
+                    "type": "ColorJitter",
+                    "kwargs": {
+                        "hue": [-0.1, 0.1]
+                    }
+                },
+                "sharpness": {
+                    "weight": 0.5,
+                    "type": "SharpnessJitter",
+                    "kwargs": {
+                        "sharpness": [0.5, 2.0]
+                    }
+                }
+            }
+        },
+        "revision": null,
+        "use_imagenet_stats": false,
+        "video_backend": "pyav"
+    },
+    "output_dir": "/home/gota/ggando/ml/so101-playground/outputs/reward_classifier_grasp_only_v4",
+    "job_name": "reward_classifier_grasp_only_v4",
+    "resume": false,
+    "seed": 1000,
+    "num_workers": 4,
+    "batch_size": 64,
+    "steps": 5000,
+    "eval_freq": 250,
+    "log_freq": 50,
+    "save_checkpoint": true,
+    "save_freq": 500,
+    "use_policy_training_preset": true,
+    "optimizer": null,
+    "scheduler": null,
+    "val_ratio": 0.15,
+    "patience": 10,
+    "wandb": {
+        "enable": false,
+        "disable_artifact": true,
+        "project": "so101-reward-classifier",
+        "entity": null,
+        "notes": "Binary reward classifier with frame-level train/val split. Data: positive, negative, nighttime, daytime_negative",
+        "run_id": null,
+        "mode": null
+    }
+}

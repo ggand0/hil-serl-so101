@@ -1,0 +1,20 @@
+{
+    "dataset_path": "/home/gota/.cache/huggingface/lerobot/gtgando/so101_grasp_only_v1",
+    "episodes": {
+        "0": {"success_start": 34},
+        "1": {"success_start": 46},
+        "2": {"success_start": 28},
+        "3": {"success_start": 44},
+        "4": {"success_start": 38},
+        "5": {"success_start": 46},
+        "6": {"success_start": 23},
+        "7": {"success_start": 26},
+        "8": {"success_start": 56},
+        "9": {"success_start": 49},
+        "10": {"success_start": 40},
+        "11": {"success_start": 29},
+        "12": {"success_start": 31},
+        "13": {"success_start": 46},
+        "14": {"ranges": [[40, 48], [60, null]]}
+    }
+}

@@ -7,7 +7,7 @@ authors = [
 ]
 dependencies = [
     "feetech-servo-sdk>=1.0.0",
-    "lerobot",
+    "lerobot[hilserl]",
     "numpy",
     "torch>=2.4.0",
     "torchvision>=0.19.0",

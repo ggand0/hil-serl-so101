@@ -2,11 +2,14 @@ tmp*
 *.png
 *.mp4
 calibration*/
+data/
 devlogs/
 recordings/
 outputs/
 resources/
 CLAUDE.md
+checkpoints/
+third_party/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
