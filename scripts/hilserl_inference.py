@@ -12,13 +12,23 @@ Usage:
         --config_path configs/grasp_only_hilserl_train_config.json \
         --checkpoint outputs/hilserl_grasp_only_v2/checkpoints/last/pretrained_model \
         --num_episodes 5
+
+    # Record video
+    uv run python scripts/hilserl_inference.py \
+        --config_path configs/grasp_only_hilserl_eval_config.json \
+        --checkpoint outputs/hilserl_grasp_only_v2/checkpoints/003000/pretrained_model \
+        --num_episodes 5 \
+        --record_video --video_dir recordings/
 """
 
 import argparse
 import logging
+import os
 import sys
 import time
+from datetime import datetime
 
+import cv2
 import numpy as np
 import torch
 
@@ -54,6 +64,17 @@ def main():
         default="cuda",
         help="Torch device",
     )
+    parser.add_argument(
+        "--record_video",
+        action="store_true",
+        help="Record video of each episode",
+    )
+    parser.add_argument(
+        "--video_dir",
+        type=str,
+        default="recordings",
+        help="Directory to save recorded videos",
+    )
     args = parser.parse_args()
 
     # Import after path setup
@@ -68,6 +89,12 @@ def main():
     print(f"Config: {args.config_path}")
     print(f"Checkpoint: {args.checkpoint}")
     print(f"Episodes: {args.num_episodes}")
+    print(f"Record video: {args.record_video}")
+
+    # Create video directory if recording
+    if args.record_video:
+        os.makedirs(args.video_dir, exist_ok=True)
+        print(f"  Video dir: {args.video_dir}")
 
     # === 1. Load Config ===
     print("\n[1/3] Loading config...")
@@ -108,6 +135,14 @@ def main():
             truncated = False
             step = 0
             episode_reward = 0.0
+            video_writer = None
+            video_path = None
+
+            # Initialize video path for this episode
+            if args.record_video:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                video_path = os.path.join(args.video_dir, f"episode_{episode + 1:03d}_{timestamp}.mp4")
+                # VideoWriter initialized on first frame to get correct dimensions
 
             while not done and not truncated:
                 step_start = time.perf_counter()
@@ -120,6 +155,37 @@ def main():
                             print(f"    {k}: shape={v.shape}, dtype={v.dtype}")
                         elif isinstance(v, torch.Tensor):
                             print(f"    {k}: shape={v.shape}, dtype={v.dtype} (tensor)")
+
+                # Record video frame
+                if args.record_video:
+                    # Get image from observation
+                    img_key = "observation.images.gripper_cam"
+                    if img_key in obs:
+                        img = obs[img_key]
+                        if isinstance(img, torch.Tensor):
+                            img = img.cpu().numpy()
+                        # Handle batch dimension: [1, C, H, W] or [C, H, W]
+                        if img.ndim == 4:
+                            img = img[0]  # Remove batch dim
+                        # Convert from [C, H, W] to [H, W, C]
+                        if img.shape[0] == 3:
+                            img = np.transpose(img, (1, 2, 0))
+                        # Convert from normalized [0, 1] to [0, 255] if needed
+                        if img.max() <= 1.0:
+                            img = (img * 255).astype(np.uint8)
+                        else:
+                            img = img.astype(np.uint8)
+                        # Convert RGB to BGR for OpenCV
+                        img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+                        # Initialize video writer on first frame
+                        if video_writer is None:
+                            h, w = img_bgr.shape[:2]
+                            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                            video_writer = cv2.VideoWriter(video_path, fourcc, fps, (w, h))
+                            print(f"  Recording to: {video_path}")
+
+                        video_writer.write(img_bgr)
 
                 # Prepare observation for policy
                 # Env already returns tensors with batch dim [1, ...], just move to device
@@ -173,6 +239,11 @@ def main():
                 sleep_time = control_dt - elapsed
                 if sleep_time > 0:
                     time.sleep(sleep_time)
+
+            # Release video writer
+            if video_writer is not None:
+                video_writer.release()
+                print(f"  Video saved: {video_path}")
 
             status = "SUCCESS" if reward > 0.5 else "FAIL"
             print(f"  Episode {episode + 1} complete: steps={step}, reward={episode_reward:.2f} [{status}]")
