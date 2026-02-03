@@ -19,8 +19,12 @@ JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wri
 # Height offset for approach (matching gym_manipulator.py)
 HEIGHT_OFFSET = 0.07  # 7cm above target for approach
 
-# Home position (safe joints)
-HOME_JOINTS_DEG = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
+# REST_JOINTS from actor.py/rl_inference.py - safe resting position
+# REST_JOINTS_RAD = np.array([-0.2424, -1.8040, 1.6582, 0.7309, -0.0629])
+REST_JOINTS_DEG = np.array([-13.89, -103.36, 95.01, 41.88, -3.60])
+
+# SAFE_JOINTS - intermediate safe position (all zeros, arm extended forward)
+SAFE_JOINTS_DEG = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
 
 # Global robot reference for signal handler
 _robot = None
@@ -28,26 +32,99 @@ _camera = None
 _cleanup_done = False
 
 def cleanup():
-    """Return to home and disconnect."""
+    """
+    Safe return sequence matching actor.py safe_return_to_home():
+    1. First lift to safe height (15cm) using IK
+    2. Then move to REST_JOINTS position
+    Does NOT disconnect to keep torque enabled.
+    """
     global _robot, _camera, _cleanup_done
     if _cleanup_done:
         return
     _cleanup_done = True
 
     if _robot is not None and _robot.is_connected:
-        print("\nReturning to home position...")
+        print("\n=== Safe Return Sequence ===")
+
+        # Step 1: Lift to safe height (15cm) using IK
+        print("Step 1: Lifting to safe height (15cm)...")
         try:
-            action_dict = {f"{name}.pos": HOME_JOINTS_DEG[i] for i, name in enumerate(JOINT_NAMES)}
-            action_dict["gripper.pos"] = 50.0
-            _robot.send_action(action_dict)
-            busy_wait(2.0)
+            obs = _robot.get_observation()
+            current_deg = np.array([obs[f"{name}.pos"] for name in JOINT_NAMES])
+            current_rad = np.deg2rad(current_deg)
+
+            _robot._sync_mujoco(current_rad)
+            current_ee = _robot._get_ee_position()
+
+            # Target: lift to 15cm height
+            safe_height_target = current_ee.copy()
+            safe_height_target[2] = 0.15
+
+            for step in range(40):
+                obs = _robot.get_observation()
+                current_deg = np.array([obs[f"{name}.pos"] for name in JOINT_NAMES])
+                current_rad = np.deg2rad(current_deg)
+
+                # Lock wrist orientation
+                current_rad[3] = np.pi / 2   # wrist_flex
+                current_rad[4] = -np.pi / 2  # wrist_roll
+
+                # Compute IK with locked wrist
+                target_rad = _robot._compute_ik(safe_height_target, current_rad)
+                target_rad[3] = np.pi / 2
+                target_rad[4] = -np.pi / 2
+
+                target_deg = np.rad2deg(target_rad)
+
+                # Clamp delta to max 10° per step
+                delta_deg = np.clip(target_deg - current_deg, -10, 10)
+                target_deg = current_deg + delta_deg
+                target_deg = clamp_degrees(target_deg)
+
+                action_dict = {f"{name}.pos": target_deg[i] for i, name in enumerate(JOINT_NAMES)}
+                action_dict["gripper.pos"] = 50.0
+                _robot.send_action(action_dict)
+                busy_wait(0.05)
+
+                # Check if high enough
+                _robot._sync_mujoco(np.deg2rad(target_deg))
+                ee_pos = _robot._get_ee_position()
+                if ee_pos[2] > 0.12:
+                    print(f"  Lifted to height: {ee_pos[2]*100:.1f}cm")
+                    break
+
+            busy_wait(0.3)
         except Exception as e:
-            print(f"Error returning home: {e}")
+            print(f"  Lift failed ({e}), going directly to rest...")
+
+        # Step 2: Interpolate to REST_JOINTS position (gradual movement like ik_grasp_demo)
+        print("Step 2: Interpolating to rest position...")
         try:
-            _robot.disconnect()
-            print("Robot disconnected.")
-        except Exception:
-            pass
+            obs = _robot.get_observation()
+            current_deg = np.array([obs[f"{name}.pos"] for name in JOINT_NAMES])
+            rest_deg = clamp_degrees(REST_JOINTS_DEG.copy())
+
+            # Gradual interpolation over 20 steps (2 seconds)
+            for i in range(20):
+                alpha = (i + 1) / 20
+                interp_deg = (1 - alpha) * current_deg + alpha * rest_deg
+                action_dict = {f"{name}.pos": interp_deg[j] for j, name in enumerate(JOINT_NAMES)}
+                action_dict["gripper.pos"] = -50.0  # Close gripper
+                _robot.send_action(action_dict)
+                time.sleep(0.1)
+
+            # Final position
+            action_dict = {f"{name}.pos": rest_deg[i] for i, name in enumerate(JOINT_NAMES)}
+            action_dict["gripper.pos"] = -50.0
+            _robot.send_action(action_dict)
+            time.sleep(1.0)
+
+            print("Robot at rest position. Torque remains ON.")
+        except Exception as e:
+            print(f"Error moving to rest: {e}")
+
+        # DO NOT disconnect - keep torque enabled for safety
+
     if _camera is not None:
         cv2.destroyAllWindows()
         try:
@@ -60,6 +137,11 @@ def signal_handler(sig, frame):
     """Handle Ctrl+C gracefully."""
     print("\n\nCtrl+C detected!")
     cleanup()
+    print("\nPress Enter to exit (torque will be disabled)...")
+    try:
+        input()
+    except EOFError:
+        pass
     sys.exit(0)
 
 # Register signal handler
@@ -261,6 +343,11 @@ def main():
 
     finally:
         cleanup()
+        print("\nPress Enter to exit (torque will be disabled)...")
+        try:
+            input()
+        except EOFError:
+            pass
 
 if __name__ == "__main__":
     main()
