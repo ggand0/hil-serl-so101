@@ -126,6 +126,9 @@ def main():
     fps = cfg.env.fps
     control_dt = 1.0 / fps
 
+    # Track results for summary
+    episode_results = []
+
     try:
         for episode in range(args.num_episodes):
             print(f"\n--- Episode {episode + 1}/{args.num_episodes} ---")
@@ -245,7 +248,14 @@ def main():
                 video_writer.release()
                 print(f"  Video saved: {video_path}")
 
-            status = "SUCCESS" if reward > 0.5 else "FAIL"
+            success = reward > 0.5
+            status = "SUCCESS" if success else "FAIL"
+            episode_results.append({
+                "episode": episode + 1,
+                "steps": step,
+                "reward": episode_reward,
+                "success": success,
+            })
             print(f"  Episode {episode + 1} complete: steps={step}, reward={episode_reward:.2f} [{status}]")
 
     except KeyboardInterrupt:
@@ -254,6 +264,30 @@ def main():
     finally:
         print("\nCleaning up...")
         env.close()
+
+        # Print evaluation summary
+        if episode_results:
+            print("\n" + "=" * 60)
+            print("EVALUATION SUMMARY")
+            print("=" * 60)
+            print(f"{'Episode':<10} {'Steps':<10} {'Reward':<12} {'Result':<10}")
+            print("-" * 42)
+            for r in episode_results:
+                status = "SUCCESS" if r["success"] else "FAIL"
+                print(f"{r['episode']:<10} {r['steps']:<10} {r['reward']:<12.2f} {status:<10}")
+            print("-" * 42)
+
+            total = len(episode_results)
+            successes = sum(1 for r in episode_results if r["success"])
+            mean_reward = sum(r["reward"] for r in episode_results) / total
+            mean_steps = sum(r["steps"] for r in episode_results) / total
+
+            print(f"Total Episodes: {total}")
+            print(f"Success Rate:   {successes}/{total} ({100*successes/total:.1f}%)")
+            print(f"Mean Reward:    {mean_reward:.2f}")
+            print(f"Mean Steps:     {mean_steps:.1f}")
+            print("=" * 60)
+
         print("Done.")
 
 
