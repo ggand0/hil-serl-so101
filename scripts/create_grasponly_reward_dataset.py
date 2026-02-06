@@ -122,6 +122,17 @@ def create_reward_dataset(config_name: str = "reward_v1"):
                 "length": num_frames,
             })
 
+            # Copy episode stats from source
+            src_stats_path = ds_path / "meta" / "episodes_stats.jsonl"
+            if src_stats_path.exists():
+                with open(src_stats_path) as f:
+                    for line in f:
+                        stat = json.loads(line)
+                        if stat["episode_index"] == ep_num:
+                            stat["episode_index"] = new_ep_idx
+                            episode_infos[-1]["stats"] = stat["stats"]
+                            break
+
             all_frames.append(df)
             print(f"  ep{ep_num} -> {new_ep_idx}: {num_frames} frames, {success_count} success")
 
@@ -135,7 +146,15 @@ def create_reward_dataset(config_name: str = "reward_v1"):
     # Write metadata
     with open(meta_dir / "episodes.jsonl", 'w') as f:
         for ep_info in episode_infos:
-            f.write(json.dumps(ep_info) + "\n")
+            ep_data = {k: v for k, v in ep_info.items() if k != "stats"}
+            f.write(json.dumps(ep_data) + "\n")
+
+    # Write episodes_stats.jsonl
+    with open(meta_dir / "episodes_stats.jsonl", 'w') as f:
+        for ep_info in episode_infos:
+            if "stats" in ep_info:
+                stat_data = {"episode_index": ep_info["episode_index"], "stats": ep_info["stats"]}
+                f.write(json.dumps(stat_data) + "\n")
 
     with open(meta_dir / "tasks.jsonl", 'w') as f:
         f.write(json.dumps({"task_index": 0, "task": "grasp_only"}) + "\n")

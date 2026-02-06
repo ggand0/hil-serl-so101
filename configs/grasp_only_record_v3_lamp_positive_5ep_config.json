@@ -1,0 +1,94 @@
+{
+    "type": "gym_manipulator",
+    "name": "real_robot",
+    "task": "grasp_only",
+    "fps": 10,
+    "mode": "record",
+    "repo_id": "gtgando/so101_grasp_only_v3_lamp_positive_5ep",
+    "dataset_root": null,
+    "num_episodes": 5,
+    "episode": 0,
+    "device": "cuda",
+    "push_to_hub": false,
+    "number_of_steps_after_success": 10,
+    "reward_classifier_pretrained_path": null,
+    "features": {
+        "observation.images.gripper_cam": {
+            "type": "VISUAL",
+            "shape": [3, 480, 640]
+        },
+        "observation.state": {
+            "type": "STATE",
+            "shape": [18]
+        },
+        "action": {
+            "type": "ACTION",
+            "shape": [4]
+        }
+    },
+    "robot": {
+        "type": "so101_follower_end_effector",
+        "id": "ggando_so101_follower",
+        "calibration_dir": "/home/gota/.cache/huggingface/lerobot/calibration/robots/so101_follower",
+        "port": "/dev/ttyACM0",
+        "disable_torque_on_disconnect": true,
+        "max_relative_target": null,
+        "cameras": {
+            "gripper_cam": {
+                "type": "opencv",
+                "fps": 30,
+                "width": 640,
+                "height": 480,
+                "index_or_path": "/dev/video0",
+                "color_mode": "rgb",
+                "rotation": 0,
+                "warmup_s": 1
+            }
+        },
+        "use_degrees": true,
+        "mujoco_model_path": "/home/gota/ggando/ml/pick-101/models/so101/lift_cube.xml",
+        "end_effector_site": "gripperframe",
+        "ik_damping": 0.1,
+        "ik_max_dq": 0.5,
+        "locked_joints": [],
+        "locked_joint_positions": {},
+        "end_effector_bounds": {
+            "min": [0.10, -0.15, -0.02],
+            "max": [0.35, 0.15, 0.25]
+        },
+        "max_gripper_pos": 50.0,
+        "action_scale": 0.02
+    },
+    "teleop": {
+        "type": "so101_leader",
+        "id": "ggando_so101_leader",
+        "calibration_dir": "/home/gota/.cache/huggingface/lerobot/calibration/teleoperators/so101_leader",
+        "port": "/dev/ttyACM1",
+        "use_degrees": true
+    },
+    "wrapper": {
+        "control_mode": "leader",
+        "display_cameras": true,
+        "add_joint_velocity_to_observation": false,
+        "add_current_to_observation": false,
+        "add_ee_pose_to_observation": false,
+        "add_full_proprioception": true,
+        "use_radians": true,
+        "normalize_images": false,
+        "crop_params_dict": null,
+        "resize_size": null,
+        "control_time_s": 20.0,
+        "fixed_reset_joint_positions": null,
+        "reset_time_s": 2.0,
+        "reset_delay_s": 2.0,
+        "use_ik_reset": true,
+        "ik_reset_ee_pos": [0.25, 0.0, 0.07],
+        "random_ee_reset": true,
+        "random_ee_range_xy": 0.01,
+        "random_ee_range_z": 0.01,
+        "use_gripper": true,
+        "gripper_quantization_threshold": 0.8,
+        "gripper_penalty": 0.0,
+        "gripper_penalty_in_reward": false
+    }
+}

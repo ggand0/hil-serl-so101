@@ -130,7 +130,7 @@
         "episode": 0,
         "device": "cuda",
         "push_to_hub": false,
-        "reward_classifier_pretrained_path": "/home/gota/ggando/ml/so101-playground/outputs/reward_classifier_grasp_only_v5/best_model",
+        "reward_classifier_pretrained_path": "/home/gota/ggando/ml/so101-playground/outputs/reward_classifier_grasp_only_v5_lamp/best_model",
         "features": {
             "observation.images.gripper_cam": {
                 "type": "VISUAL",
@@ -210,8 +210,8 @@
             "use_ik_reset": true,
             "ik_reset_ee_pos": [0.25, 0.0, 0.03],
             "random_ee_reset": false,
-            "random_ee_range_xy": 0.03,
-            "random_ee_range_z": 0.02,
+            "random_ee_range_xy": 0.01,
+            "random_ee_range_z": 0.01,
             "use_gripper": true,
             "gripper_quantization_threshold": 0.8,
             "gripper_penalty": 0.0,
