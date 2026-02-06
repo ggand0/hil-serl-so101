@@ -2,7 +2,7 @@
 
 Human-in-the-Loop SERL (HIL-SERL) training for the SO-101 robot arm using [LeRobot](https://github.com/huggingface/lerobot).
 
-Achieves 60% autonomous grasp success rate after ~250 training episodes with human interventions.
+Achieves **70% autonomous grasp success rate** after ~3 hours of real-world training (~600 episodes) with human interventions.
 
 **Related repos:**
 - [pick-101](https://github.com/ggand0/pick-101) - MuJoCo simulation for sim2real experiments
@@ -90,7 +90,7 @@ uv run python scripts/reward_classifier_live_preview.py
 ```
 
 **Options:**
-- `--model_path` - Path to trained classifier (default: v3)
+- `--model_path` - Path to trained classifier (default: v5_lamp)
 - `--threshold` - Classification threshold (default: 0.5)
 - `--record output.mp4` - Record video
 
@@ -121,8 +121,8 @@ Evaluate a trained SAC policy:
 ```bash
 uv run python scripts/hilserl_inference.py \
     --config_path configs/grasp_only_hilserl_eval_config.json \
-    --checkpoint outputs/hilserl_grasp_only_v2/checkpoints/003000/pretrained_model \
-    --num_episodes 5
+    --checkpoint outputs/hilserl_grasp_only_v3_lamp/checkpoints/009500/pretrained_model \
+    --num_episodes 10
 ```
 
 With video recording:
@@ -130,8 +130,8 @@ With video recording:
 ```bash
 uv run python scripts/hilserl_inference.py \
     --config_path configs/grasp_only_hilserl_eval_config.json \
-    --checkpoint outputs/hilserl_grasp_only_v2/checkpoints/003000/pretrained_model \
-    --num_episodes 5 \
+    --checkpoint outputs/hilserl_grasp_only_v3_lamp/checkpoints/009500/pretrained_model \
+    --num_episodes 10 \
     --record_video --video_dir recordings/
 ```
 
