@@ -90,7 +90,7 @@ uv run python scripts/reward_classifier_live_preview.py
 ```
 
 **Options:**
-- `--model_path` - Path to trained classifier (default: v3)
+- `--model_path` - Path to trained classifier (default: v5_lamp)
 - `--threshold` - Classification threshold (default: 0.5)
 - `--record output.mp4` - Record video
 
